@@ -3,14 +3,19 @@ package ui
 import "base:runtime"
 import "core:hash"
 import "core:mem"
+import "core:text/edit"
+import "core:strings"
 import "core:fmt"
 import "core:c"
 import rl "vendor:raylib"
 
 // constants ///////////////////////////////////////////////////////////////////
 
-ID_GENERATOR_BUFFER_SIZE :: #config(UI_ID_GENERATOR_BUFFER_SIZE, 256)
+SCRATCH_MEMORY_SIZE :: #config(UI_SCRATCH_MEMORY_SIZE, 1024)
 LAYOUT_STACK_SIZE   :: #config(UI_LAYOUT_STACK_SIZE, 32)
+
+EDIT_UNDO_STATE_SCRATCH_CAPACITY :: #config(UI_EDIT_UNDO_STATE_SCRATCH_CAPACITY, 1024)
+EDIT_UNDO_TEXT_SCRATCH_CAPACITY:: #config(UI_EDIT_UNDO_TEXT_SCRATCH_CAPACITY, 1024)
 
 // types ///////////////////////////////////////////////////////////////////////
 
@@ -33,16 +38,22 @@ Layout_Info :: struct {
 
 // globals /////////////////////////////////////////////////////////////////////
 
-global_hot_id              : Id
-global_active_id           : Id
-global_id_generator_memory : [ID_GENERATOR_BUFFER_SIZE]u8
+global_hot_id     : Id
+global_active_id  : Id
+global_focus_flag : bool
 
+global_scratch           : mem.Scratch
+global_scratch_allocator : mem.Allocator
 
 global_mouse_position  : [2]f32
 global_mouse_left_down : bool
 
 global_layout_stack     : [LAYOUT_STACK_SIZE]Layout_Info
 global_layout_stack_top : int
+
+global_edit_undo_state_scratch : mem.Scratch
+global_edit_undo_text_scratch  : mem.Scratch
+global_edit_state              : edit.State
 
 // init / fini /////////////////////////////////////////////////////////////////
 
@@ -58,9 +69,19 @@ init :: proc() {
     global_active_id = 0
     global_layout_stack[0] = Layout_Info{}
     global_layout_stack_top = 1
+    mem.scratch_init(&global_scratch, SCRATCH_MEMORY_SIZE)
+    global_scratch_allocator = mem.scratch_allocator(&global_scratch)
+    mem.scratch_init(&global_edit_undo_state_scratch, EDIT_UNDO_STATE_SCRATCH_CAPACITY)
+    mem.scratch_init(&global_edit_undo_text_scratch, EDIT_UNDO_TEXT_SCRATCH_CAPACITY)
+    edit.init(&global_edit_state,
+              mem.scratch_allocator(&global_edit_undo_state_scratch),
+              mem.scratch_allocator(&global_edit_undo_text_scratch))
 }
 
 fini :: proc() {
+    edit.destroy(&global_edit_state)
+    mem.scratch_destroy(&global_edit_undo_state_scratch)
+    mem.scratch_destroy(&global_edit_undo_text_scratch)
 }
 
 init_frame :: proc() {
@@ -77,7 +98,7 @@ init_frame :: proc() {
 }
 
 fini_frame :: proc() {
-    if !global_mouse_left_down {
+    if !global_mouse_left_down && !global_focus_flag {
         global_active_id = 0
     }
     rl.EndDrawing()
@@ -89,14 +110,16 @@ get_id :: proc(loc: runtime.Source_Code_Location, index: int) -> Id {
     index     := index
     line      := loc.line
     raw_path  := raw_data(loc.file_path)
-    data      := global_id_generator_memory[:]
+    data, err := mem.alloc_bytes_non_zeroed(2*size_of(int) + len(loc.file_path), 8, global_scratch_allocator)
     offset    := 0
+
+    assert(err == nil, "id generator buffer allocation failed")
 
     mem.copy(raw_data(data[offset:]), &index,   size_of(int))
     offset += size_of(int)
     mem.copy(raw_data(data[offset:]), &line,    size_of(int))
     offset += size_of(int)
-    mem.copy(raw_data(data[offset:]), raw_path, min(len(loc.file_path), len(data[offset:])))
+    mem.copy(raw_data(data[offset:]), raw_path, len(loc.file_path))
     return hash.fnv32a(data)
 }
 
@@ -363,25 +386,26 @@ style_button := Button_Style{
 button_floating :: proc(label: string, x, y, w, h: f32, index := 0, loc := #caller_location) -> (clicked: bool) {
     id := get_id(loc, index)
 
-    // determine state
     if global_active_id == 0 || global_active_id == id {
-        if rl.CheckCollisionPointRec(global_mouse_position, rl.Rectangle{x, y, w, h}) {
+        if rl.CheckCollisionPointRec(global_mouse_position, {x, y, w, h}) {
             global_hot_id = id
-
-            if global_mouse_left_down {
-                global_active_id = id
-            } else if global_active_id == id {
+        }
+        if global_mouse_left_down {
+            if global_hot_id == id {
+                global_active_id  = id
+                global_focus_flag = true
+            }
+        } else if global_active_id == id {
+            global_active_id  = 0
+            global_focus_flag = false
+            if global_hot_id == id {
                 clicked = true
-                global_active_id = 0
             }
         }
     }
 
     // draw
-    x := x
-    y := y
-    w := w
-    h := h
+    x, y, w, h := x, y, w, h
 
     // border
     rl.DrawRectangleRec(rl.Rectangle{x, y, w, h}, style_button.border_color)
@@ -440,3 +464,153 @@ button :: proc{
 // header //////////////////////////////////////////////////////////////////////
 
 // text input //////////////////////////////////////////////////////////////////
+
+TEXT_INPUT_CARET_SIZE :: 2
+
+Text_Input_Style :: struct {
+    idle_background_color : rl.Color,
+    focused_background_color : rl.Color,
+    caret_color : rl.Color,
+    border_color : rl.Color,
+    selection_color : rl.Color,
+    text_color : rl.Color,
+    selected_text_color : rl.Color,
+    padding : Padding,
+}
+
+style_text_input := Text_Input_Style{
+    idle_background_color    = rl.Color{48, 48, 48, 255},
+    focused_background_color = rl.Color{32, 32, 32, 255},
+    caret_color              = rl.Color{255, 255, 255, 255},
+    border_color             = rl.Color{0, 0, 0, 255},
+    selection_color          = rl.Color{100, 100, 100, 255},
+    text_color               = rl.Color{255, 255, 255, 255},
+    selected_text_color      = rl.Color{255, 255, 255, 255},
+    padding                  = Padding{2, 2, 2, 2},
+}
+
+text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, index := 0, loc := #caller_location) -> (submitted: bool) {
+    id := get_id(loc, index)
+    focused: bool
+
+    // determine state
+    if global_active_id == 0 || global_active_id == id {
+        if rl.CheckCollisionPointRec(global_mouse_position, rl.Rectangle{x, y, w, h}) {
+            global_hot_id = id
+        }
+        if global_mouse_left_down {
+            if global_hot_id == id {
+                // take or keep focus if hovered and clicked
+                global_active_id  = id
+                global_focus_flag = true
+                edit.begin(&global_edit_state, cast(u64)id, builder)
+            } else if global_active_id == id {
+                // lose focus if click happens outside of the edit box
+                global_focus_flag = false
+                defer edit.end(&global_edit_state)
+            }
+        }
+    }
+    focused = global_active_id == id
+
+    // get inputs
+    // NOTE: since the edit state holds the id (which is non 0 when the text
+    //       box is focused), we could technically move this elsewhere (to
+    //       group event handling)
+    if focused {
+        command: edit.Command
+        shift  := rl.IsKeyDown(.LEFT_SHIFT)
+
+        if rl.IsKeyDown(.LEFT_CONTROL) {
+            switch {
+            case rl.IsKeyPressed(.LEFT)     : command = .Select_Word_Left  if shift else .Word_Left
+            case rl.IsKeyPressed(.RIGHT)    : command = .Select_Word_Right if shift else .Word_Right
+            case rl.IsKeyPressed(.BACKSPACE): command = .Delete_Word_Left
+            case rl.IsKeyPressed(.DELETE)   : command = .Delete_Word_Right
+            case rl.IsKeyPressed(.A)        : global_edit_state.selection = {0, len(builder.buf[:])}
+            case rl.IsKeyPressed(.V)        : fmt.println("TODO: paste")
+            case rl.IsKeyPressed(.Z)        : command = .Undo
+            case rl.IsKeyPressed(.Y)        : command = .Redo
+            case rl.IsKeyPressed(.C) && edit.has_selection(&global_edit_state): fmt.println("TODO: copy")
+            }
+        } else {
+            switch {
+            case rl.IsKeyPressed(.LEFT)     : command = .Select_Left       if shift else .Left
+            case rl.IsKeyPressed(.RIGHT)    : command = .Select_Right      if shift else .Right
+            case rl.IsKeyPressed(.HOME)     : command = .Select_Line_Start if shift else .Line_Start
+            case rl.IsKeyPressed(.END)      : command = .Select_Line_End   if shift else .Line_End
+            case rl.IsKeyPressed(.BACKSPACE): command = .Backspace
+            case rl.IsKeyPressed(.DELETE)   : command = .Delete
+            case rl.IsKeyPressed(.ENTER):
+                submitted = true
+                global_active_id  = 0
+                global_focus_flag = false
+            case:
+                // TODO: it would be more efficient to collect the keys first before inserting
+                for {
+                    c := rl.GetCharPressed()
+                    if c == 0 do break
+                    edit.input_rune(&global_edit_state, c)
+                }
+            }
+        }
+        edit.perform_command(&global_edit_state, command)
+    }
+
+    // draw
+    x, y, w, h := x, y, w, h
+
+    // border
+    rl.DrawRectangleRec({x, y, w, h}, style_text_input.border_color)
+    x += 1
+    y += 1
+    w -= 2
+    h -= 2
+
+    // background
+    if focused {
+        rl.DrawRectangleRec({x, y, w, h}, style_text_input.focused_background_color)
+    } else {
+        rl.DrawRectangleRec({x, y, w, h}, style_text_input.idle_background_color)
+    }
+    x += style_text_input.padding.l
+    y += style_text_input.padding.t
+    w -= style_text_input.padding.l + style_text_input.padding.r
+    h -= style_text_input.padding.t + style_text_input.padding.b
+
+    // text
+    content   := strings.to_string(builder^)
+    selection := global_edit_state.selection
+
+    // TODO: the text should be centered vertically
+    rl.BeginScissorMode(cast(i32)x, cast(i32)y, cast(i32)w, cast(i32)h)
+    if focused {
+        if edit.has_selection(&global_edit_state) {
+            sb := selection[0] // selection begin
+            se := selection[1] // selection end
+            if sb > se do sb, se = se, sb
+
+            text_before_selection := string(content[:sb])
+            text_selected         := string(content[sb:se])
+            text_after_selection  := string(content[se:])
+            selection_size        := measure_text(text_selected)
+
+            x += draw_text(text_before_selection, {x, y}, style_text_input.selected_text_color).x
+            rl.DrawRectangleRec({x, y, selection_size.x, selection_size.y}, style_text_input.selection_color)
+            x += draw_text(text_selected, {x, y}, style_text_input.selected_text_color).x
+            x += draw_text(text_after_selection, {x, y}, style_text_input.text_color).x
+        } else {
+            // TODO: scroll the text relatively to the cursor
+            // no selection but focused: draw text and caret
+            draw_text(content, {x, y}, style_text_input.text_color)
+            caret_index := clamp(selection[0], 0, len(content))
+            text_size := measure_text(content[:caret_index])
+            rl.DrawRectangleRec({x + text_size.x, y, TEXT_INPUT_CARET_SIZE, style_ui.font_size}, style_text_input.caret_color)
+        }
+    } else {
+        // not focused, draw text
+        draw_text(content, {x, y}, style_text_input.text_color)
+    }
+    rl.EndScissorMode()
+    return
+}
