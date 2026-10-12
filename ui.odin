@@ -36,6 +36,8 @@ Layout_Info :: struct {
     item_index   : int,
 }
 
+// we have to use draw commands if we want to have different background colors (may also be cleaner)
+
 // globals /////////////////////////////////////////////////////////////////////
 
 global_hot_id     : Id
@@ -490,6 +492,7 @@ style_text_input := Text_Input_Style{
 }
 
 text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, index := 0, loc := #caller_location) -> (submitted: bool) {
+    @(static) scroll_xoffset : f32 = 0 // used to scroll the text when it goes out of the box
     id := get_id(loc, index)
     focused: bool
 
@@ -503,10 +506,12 @@ text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, index :=
                 // take or keep focus if hovered and clicked
                 global_active_id  = id
                 global_focus_flag = true
+                scroll_xoffset = 0
                 edit.begin(&global_edit_state, cast(u64)id, builder)
             } else if global_active_id == id {
                 // lose focus if click happens outside of the edit box
                 global_focus_flag = false
+                scroll_xoffset = 0
                 defer edit.end(&global_edit_state)
             }
         }
@@ -534,17 +539,19 @@ text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, index :=
             case rl.IsKeyPressed(.C) && edit.has_selection(&global_edit_state): fmt.println("TODO: copy")
             }
         } else {
+            // TODO: we need to handle the mouse as well
             switch {
             case rl.IsKeyPressed(.LEFT)     : command = .Select_Left       if shift else .Left
             case rl.IsKeyPressed(.RIGHT)    : command = .Select_Right      if shift else .Right
-            case rl.IsKeyPressed(.HOME)     : command = .Select_Line_Start if shift else .Line_Start
-            case rl.IsKeyPressed(.END)      : command = .Select_Line_End   if shift else .Line_End
+            case rl.IsKeyPressed(.HOME)     : command = .Select_Start if shift else .Start
+            case rl.IsKeyPressed(.END)      : command = .Select_End   if shift else .End
             case rl.IsKeyPressed(.BACKSPACE): command = .Backspace
             case rl.IsKeyPressed(.DELETE)   : command = .Delete
             case rl.IsKeyPressed(.ENTER):
                 submitted = true
                 global_active_id  = 0
                 global_focus_flag = false
+                scroll_xoffset = 0
             case:
                 // TODO: it would be more efficient to collect the keys first before inserting
                 for {
@@ -585,6 +592,19 @@ text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, index :=
     // TODO: the text should be centered vertically
     rl.BeginScissorMode(cast(i32)x, cast(i32)y, cast(i32)w, cast(i32)h)
     if focused {
+
+        // update the scroll offset
+        {
+            text_before_caret_size := measure_text(content[:selection[0]])
+            caret_pos := text_before_caret_size.x + scroll_xoffset
+            if caret_pos < 0 {
+                scroll_xoffset = -text_before_caret_size.x
+            } else if caret_pos > (w - TEXT_INPUT_CARET_SIZE) {
+                scroll_xoffset = (w - TEXT_INPUT_CARET_SIZE) - text_before_caret_size.x
+            }
+            x += scroll_xoffset
+        }
+
         if edit.has_selection(&global_edit_state) {
             sb := selection[0] // selection begin
             se := selection[1] // selection end
