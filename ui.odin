@@ -28,13 +28,20 @@ Layout_Info :: struct {
     mode         : Layout_Mode,
     xoffset      : f32,
     yoffset      : f32,
-    h, w         : f32,
+    x, y, w, h   : f32,
     padding      : Padding,
     item_spacing : f32,
     item_sizes   : []f32,
     size         : Maybe(f32),
     item_index   : int,
 }
+
+Rect :: struct { x, y, w, h, corner_radius: f32, color: rl.Color }
+Text :: struct { text: string, x, y: f32, font: rl.Font, font_size: f32, color: rl.Color }
+Scissor :: struct { x, y, w, h: f32, begin: bool }
+Draw_Command :: union { Rect, Text, Scissor }
+
+Measure_Text_Proc :: #type proc(text: string, font: rl.Font)
 
 // we have to use draw commands if we want to have different background colors (may also be cleaner)
 
@@ -46,6 +53,9 @@ global_focus_flag : bool
 
 global_scratch           : mem.Scratch
 global_scratch_allocator : mem.Allocator
+
+global_draw_queue        : [dynamic]Draw_Command
+global_measure_text_proc : Measure_Text_Proc
 
 global_mouse_position  : [2]f32
 global_mouse_left_down : bool
@@ -78,9 +88,11 @@ init :: proc() {
     edit.init(&global_edit_state,
               mem.scratch_allocator(&global_edit_undo_state_scratch),
               mem.scratch_allocator(&global_edit_undo_text_scratch))
+    global_draw_queue = make([dynamic]Draw_Command)
 }
 
 fini :: proc() {
+    delete(global_draw_queue)
     edit.destroy(&global_edit_state)
     mem.scratch_destroy(&global_edit_undo_state_scratch)
     mem.scratch_destroy(&global_edit_undo_text_scratch)
@@ -103,10 +115,31 @@ fini_frame :: proc() {
     if !global_mouse_left_down && !global_focus_flag {
         global_active_id = 0
     }
+
+    for cmd_variant in global_draw_queue {
+        switch cmd in cmd_variant {
+        case Rect:
+            // TODO: add the border to the options
+            if cmd.corner_radius == 0 {
+                rl.DrawRectangleRec({cmd.x, cmd.y, cmd.w, cmd.h}, cmd.color)
+            } else {
+                rl.DrawRectangleRounded({cmd.x, cmd.y, cmd.w, cmd.h}, cmd.corner_radius, 4, cmd.color)
+            }
+        case Text:
+            rl_draw_text_ex(cmd.font, cmd.text, {cmd.x, cmd.y}, cmd.font_size, 0, cmd.color)
+        case Scissor:
+            if cmd.begin {
+                rl.BeginScissorMode(cast(c.int)cmd.x, cast(c.int)cmd.y, cast(c.int)cmd.w, cast(c.int)cmd.h)
+            } else {
+                rl.EndScissorMode()
+            }
+        }
+    }
+    clear(&global_draw_queue)
     rl.EndDrawing()
 }
 
-// utils ///////////////////////////////////////////////////////////////////////
+// id & draw ///////////////////////////////////////////////////////////////////
 
 get_id :: proc(loc: runtime.Source_Code_Location, index: int) -> Id {
     index     := index
@@ -125,12 +158,30 @@ get_id :: proc(loc: runtime.Source_Code_Location, index: int) -> Id {
     return hash.fnv32a(data)
 }
 
-draw_text :: proc(text: string, position: rl.Vector2, color: rl.Color, spacing: f32 = 0) -> [2]f32 {
-    return rl_draw_text_ex(style_ui.font, text, position, style_ui.font_size, spacing, color)
+draw_rect :: proc(x, y, w, h: f32, color: rl.Color, corner_radius: f32 = 0) {
+    append(&global_draw_queue, Rect{x, y, w, h, corner_radius, color})
 }
 
-measure_text :: proc(text: string, spacing: f32 = 0) -> [2]f32 {
-    return rl_measure_text(style_ui.font, text, style_ui.font_size, spacing)
+// TODO: switch to procedure group instead of maybe (faster)
+
+draw_text :: proc(text: string, x, y: f32, color: rl.Color, font: Maybe(rl.Font) = nil, font_size: Maybe(f32) = nil) {
+    font      := font.?      or_else style_ui.font
+    font_size := font_size.? or_else style_ui.font_size
+    append(&global_draw_queue, Text{text, x, y, font, font_size, color})
+}
+
+measure_text :: proc(text: string, font: Maybe(rl.Font) = nil, font_size: Maybe(f32) = nil) -> [2]f32 {
+    font      := font.?      or_else style_ui.font
+    font_size := font_size.? or_else style_ui.font_size
+    return rl_measure_text(font, text, font_size, 0)
+}
+
+begin_scissor_mode :: proc(x, y, w, h: f32) {
+    append(&global_draw_queue, Scissor{x, y, w, h, true})
+}
+
+end_scissor_mode :: proc() {
+    append(&global_draw_queue, Scissor{})
 }
 
 // layout ///////////////////////////////////////////////////////////////////////
@@ -166,6 +217,8 @@ layout_push :: proc(info: Layout_Info) {
     if info.yoffset == 0 {
         info.yoffset += current.yoffset
     }
+    info.x = info.xoffset
+    info.y = info.yoffset
     layout_push_floating(info)
 }
 
@@ -346,14 +399,14 @@ layout_pop_conditional :: proc(pop: bool) {
 //
 
 box_end :: proc(w, h: f32) {
-    rl.EndScissorMode()
+    end_scissor_mode()
     layout_update(w, h)
 }
 
 @(deferred_in=box_end)
 box :: proc(w, h: f32) -> bool {
     layout := get_layout()
-    rl.BeginScissorMode(cast(i32)layout.xoffset, cast(i32)layout.yoffset, cast(i32)w, cast(i32)h)
+    begin_scissor_mode(layout.xoffset, layout.yoffset, w, h)
     return true
 }
 
@@ -410,7 +463,7 @@ button_floating :: proc(label: string, x, y, w, h: f32, index := 0, loc := #call
     x, y, w, h := x, y, w, h
 
     // border
-    rl.DrawRectangleRec(rl.Rectangle{x, y, w, h}, style_button.border_color)
+    draw_rect(x, y, w, h, style_button.border_color)
     x += style_button.border_thickness
     y += style_button.border_thickness
     w -= 2 * style_button.border_thickness
@@ -418,11 +471,11 @@ button_floating :: proc(label: string, x, y, w, h: f32, index := 0, loc := #call
 
     // inside
     if global_active_id == id {
-        rl.DrawRectangleRec(rl.Rectangle{x, y, w, h}, style_button.pressed_color)
+        draw_rect(x, y, w, h, style_button.pressed_color)
     } else if global_hot_id == id {
-        rl.DrawRectangleRec(rl.Rectangle{x, y, w, h}, style_button.hover_color)
+        draw_rect(x, y, w, h, style_button.hover_color)
     } else {
-        rl.DrawRectangleRec(rl.Rectangle{x, y, w, h}, style_button.color)
+        draw_rect(x, y, w, h, style_button.color)
     }
     x += style_button.padding.l
     y += style_button.padding.t
@@ -434,7 +487,7 @@ button_floating :: proc(label: string, x, y, w, h: f32, index := 0, loc := #call
     padding := style_button.padding
     text_x := x + (w - text_size.x) / 2
     text_y := y + (h - text_size.y) / 2
-    draw_text(label, {text_x, text_y}, style_button.text_color)
+    draw_text(label, text_x, text_y, style_button.text_color)
 
     // return if the button has been clicked
     return clicked
@@ -568,7 +621,7 @@ text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, index :=
     x, y, w, h := x, y, w, h
 
     // border
-    rl.DrawRectangleRec({x, y, w, h}, style_text_input.border_color)
+    draw_rect(x, y, w, h, style_text_input.border_color)
     x += 1
     y += 1
     w -= 2
@@ -576,9 +629,9 @@ text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, index :=
 
     // background
     if focused {
-        rl.DrawRectangleRec({x, y, w, h}, style_text_input.focused_background_color)
+        draw_rect(x, y, w, h, style_text_input.focused_background_color)
     } else {
-        rl.DrawRectangleRec({x, y, w, h}, style_text_input.idle_background_color)
+        draw_rect(x, y, w, h, style_text_input.idle_background_color)
     }
     x += style_text_input.padding.l
     y += style_text_input.padding.t
@@ -590,7 +643,7 @@ text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, index :=
     selection := global_edit_state.selection
 
     // TODO: the text should be centered vertically
-    rl.BeginScissorMode(cast(i32)x, cast(i32)y, cast(i32)w, cast(i32)h)
+    begin_scissor_mode(x, y, w, h)
     if focused {
 
         // update the scroll offset
@@ -615,22 +668,27 @@ text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, index :=
             text_after_selection  := string(content[se:])
             selection_size        := measure_text(text_selected)
 
-            x += draw_text(text_before_selection, {x, y}, style_text_input.selected_text_color).x
-            rl.DrawRectangleRec({x, y, selection_size.x, selection_size.y}, style_text_input.selection_color)
-            x += draw_text(text_selected, {x, y}, style_text_input.selected_text_color).x
-            x += draw_text(text_after_selection, {x, y}, style_text_input.text_color).x
+            draw_text(text_before_selection, x, y, style_text_input.selected_text_color)
+            x += measure_text(text_before_selection).x
+
+            draw_rect(x, y, selection_size.x, selection_size.y, style_text_input.selection_color)
+
+            draw_text(text_selected, x, y, style_text_input.selected_text_color)
+            x += measure_text(text_selected).x
+
+            draw_text(text_after_selection, x, y, style_text_input.text_color)
         } else {
             // TODO: scroll the text relatively to the cursor
             // no selection but focused: draw text and caret
-            draw_text(content, {x, y}, style_text_input.text_color)
+            draw_text(content, x, y, style_text_input.text_color)
             caret_index := clamp(selection[0], 0, len(content))
             text_size := measure_text(content[:caret_index])
-            rl.DrawRectangleRec({x + text_size.x, y, TEXT_INPUT_CARET_SIZE, style_ui.font_size}, style_text_input.caret_color)
+            draw_rect(x + text_size.x, y, TEXT_INPUT_CARET_SIZE, style_ui.font_size, style_text_input.caret_color)
         }
     } else {
         // not focused, draw text
-        draw_text(content, {x, y}, style_text_input.text_color)
+        draw_text(content, x, y, style_text_input.text_color)
     }
-    rl.EndScissorMode()
+    end_scissor_mode()
     return
 }
