@@ -141,11 +141,14 @@ fini_frame :: proc() {
 
 // id & draw ///////////////////////////////////////////////////////////////////
 
+//
+// The id is generated using: [user index|8][source line|8][source file path address|8]
+//
 get_id :: proc(loc: runtime.Source_Code_Location, index: int) -> Id {
     index     := index
     line      := loc.line
     raw_path  := raw_data(loc.file_path)
-    data, err := mem.alloc_bytes_non_zeroed(2*size_of(int) + len(loc.file_path), 8, global_scratch_allocator)
+    data, err := mem.alloc_bytes_non_zeroed(2*size_of(int) + size_of(rawptr), 8, global_scratch_allocator)
     offset    := 0
 
     assert(err == nil, "id generator buffer allocation failed")
@@ -154,7 +157,7 @@ get_id :: proc(loc: runtime.Source_Code_Location, index: int) -> Id {
     offset += size_of(int)
     mem.copy(raw_data(data[offset:]), &line,    size_of(int))
     offset += size_of(int)
-    mem.copy(raw_data(data[offset:]), raw_path, len(loc.file_path))
+    mem.copy(raw_data(data[offset:]), &raw_path, size_of(rawptr))
     return hash.fnv32a(data)
 }
 
