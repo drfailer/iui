@@ -23,17 +23,32 @@ Id :: #type u32
 
 Padding :: struct { l, r, t, b: f32 }
 
+// TODO: we need a dedicated container struct and container stack
+// TODO: pushing a container should push a column layout (so we can access the size of the layout when poping the container, then update the parent layout)
+// TODO: offset and w/h should be merged
+// TODO: if we use a stack instead of a que for commands what doesn it change:
+// - it changes the draw order
+// - better for container background colors
+// - might be counter intuitive in the windgets (invert the draw order)
+// - does it cause issues on the user side? -> it will (draw 2 floating buttons, the stack will change the draw order)
+
+Container :: struct {
+    x, y, h, w : f32,
+    zindex : i32, // TODO
+    command_index : i32, // used if we need to modify draw commands (when using a background color)
+}
+
 Layout_Mode :: enum { Column, Row }
-Layout_Info :: struct {
-    mode         : Layout_Mode,
-    xoffset      : f32,
-    yoffset      : f32,
-    x, y, w, h   : f32,
-    padding      : Padding,
-    item_spacing : f32,
-    item_sizes   : []f32,
-    size         : Maybe(f32),
-    item_index   : int,
+Layout :: struct {
+    mode          : Layout_Mode,
+    xoffset       : f32,
+    yoffset       : f32,
+    x, y, w, h    : f32,
+    padding       : Padding,
+    item_spacing  : f32,
+    item_sizes    : []f32,
+    size          : Maybe(f32), // TODO: we should use a negative size instead of maybe (smaller)
+    item_index    : int,
 }
 
 Rect :: struct { x, y, w, h, corner_radius: f32, color: rl.Color }
@@ -43,7 +58,6 @@ Draw_Command :: union { Rect, Text, Scissor }
 
 Measure_Text_Proc :: #type proc(text: string, font: rl.Font)
 
-// we have to use draw commands if we want to have different background colors (may also be cleaner)
 
 // globals /////////////////////////////////////////////////////////////////////
 
@@ -60,8 +74,7 @@ global_measure_text_proc : Measure_Text_Proc
 global_mouse_position  : [2]f32
 global_mouse_left_down : bool
 
-global_layout_stack     : [LAYOUT_STACK_SIZE]Layout_Info
-global_layout_stack_top : int
+global_layout_stack : [dynamic; LAYOUT_STACK_SIZE]Layout
 
 global_edit_undo_state_scratch : mem.Scratch
 global_edit_undo_text_scratch  : mem.Scratch
@@ -79,8 +92,6 @@ style_ui := UI_Style{}
 init :: proc() {
     global_hot_id = 0
     global_active_id = 0
-    global_layout_stack[0] = Layout_Info{}
-    global_layout_stack_top = 1
     mem.scratch_init(&global_scratch, SCRATCH_MEMORY_SIZE)
     global_scratch_allocator = mem.scratch_allocator(&global_scratch)
     mem.scratch_init(&global_edit_undo_state_scratch, EDIT_UNDO_STATE_SCRATCH_CAPACITY)
@@ -102,7 +113,8 @@ init_frame :: proc() {
     global_hot_id = 0
 
     // reset layout stack
-    global_layout_stack_top = 0
+    clear(&global_layout_stack)
+    append(&global_layout_stack, Layout{})
 
     // get events (things can change within a frame so we collect at the start)
     global_mouse_position = rl.GetMousePosition()
@@ -147,7 +159,7 @@ fini_frame :: proc() {
 get_id :: proc(loc: runtime.Source_Code_Location, index: int) -> Id {
     index     := index
     line      := loc.line
-    raw_path  := raw_data(loc.file_path)
+    path_addr := raw_data(loc.file_path)
     data, err := mem.alloc_bytes_non_zeroed(2*size_of(int) + size_of(rawptr), 8, global_scratch_allocator)
     offset    := 0
 
@@ -157,7 +169,7 @@ get_id :: proc(loc: runtime.Source_Code_Location, index: int) -> Id {
     offset += size_of(int)
     mem.copy(raw_data(data[offset:]), &line,    size_of(int))
     offset += size_of(int)
-    mem.copy(raw_data(data[offset:]), &raw_path, size_of(rawptr))
+    mem.copy(raw_data(data[offset:]), &path_addr, size_of(rawptr))
     return hash.fnv32a(data)
 }
 
@@ -195,14 +207,12 @@ end_scissor_mode :: proc() {
 // window).
 //
 
-layout_push_floating :: proc(info: Layout_Info) {
-    if global_layout_stack_top > len(global_layout_stack) do panic("layout stack overflow")
-    global_layout_stack[global_layout_stack_top] = info
-    global_layout_stack_top += 1
+layout_push_floating :: proc(layout: Layout) {
+    append(&global_layout_stack, layout)
 }
 
 layout_pop_floating :: proc() {
-    global_layout_stack_top -= 1
+    pop(&global_layout_stack)
 }
 
 //
@@ -210,7 +220,7 @@ layout_pop_floating :: proc() {
 // offsets of the new layout before push and after pop).
 //
 
-layout_push :: proc(info: Layout_Info) {
+layout_push :: proc(info: Layout) {
     current := get_layout()
     // update the offsets
     info := info
@@ -227,15 +237,16 @@ layout_push :: proc(info: Layout_Info) {
 
 layout_pop :: proc() {
     old_layout := get_layout()
+    w, h := old_layout.w, old_layout.h
     if old_layout.mode == .Column {
-        old_layout.h -= old_layout.item_spacing
+        h -= old_layout.item_spacing
     } else {
-        old_layout.w -= old_layout.item_spacing
+        w -= old_layout.item_spacing
     }
-    old_layout.w += old_layout.padding.r
-    old_layout.h += old_layout.padding.b
+    w += old_layout.padding.r
+    h += old_layout.padding.b
     layout_pop_floating()
-    layout_update(old_layout.w, old_layout.h)
+    layout_update(w, h)
 }
 
 //
@@ -258,23 +269,17 @@ layout_update :: proc(w, h: f32) {
 }
 
 //
-// Helpers for interacting with the current layout (get the current layout;
-// returns a dummy pointer if no layout), update the style, ...
+// Helpers for interacting with the current layout, update the style, ...
 //
 
-get_layout :: proc() -> ^Layout_Info {
-    assert(global_layout_stack_top >= 0)
-    if global_layout_stack_top == 0 {
-        @(static) dummy_layout: Layout_Info
-        dummy_layout = {} // reset to avoid issues
-        return &dummy_layout
-    }
-    return &global_layout_stack[global_layout_stack_top - 1]
+get_layout :: proc() -> ^Layout {
+    return &global_layout_stack[len(global_layout_stack) - 1]
 }
 
-get_parent_layout :: proc() -> ^Layout_Info {
-    if global_layout_stack_top < 2 do return nil
-    return &global_layout_stack[global_layout_stack_top - 2]
+get_parent_layout :: proc() -> ^Layout {
+    stack_size := len(global_layout_stack)
+    if stack_size < 2 do return nil
+    return &global_layout_stack[stack_size - 2]
 }
 
 get_layout_item_size :: proc() -> (size: Maybe(f32)) {
@@ -338,6 +343,10 @@ compute_layout_item_height :: proc(h: f32) -> f32 {
 // Push column and row layouts (made to be used within an if statement).
 //
 
+// TODO: we need versions that take a color as argument
+// - we can use named arguments!!!! -> we could add all the options (including padding, would make more sens and be safer)
+// - w should be set to -1 instead of maybe?
+
 @(deferred_out=layout_pop_conditional)
 column :: proc(w: Maybe(f32) = nil, item_heights := []f32{}) -> bool {
     size := w
@@ -355,7 +364,7 @@ column :: proc(w: Maybe(f32) = nil, item_heights := []f32{}) -> bool {
     // if the size is 0, return false (we don't draw the content)
     if value, ok := size.?; ok && value == 0 do return false
 
-    layout_push(Layout_Info{
+    layout_push(Layout{
         mode = .Column,
         item_sizes = item_heights,
         size = size,
@@ -380,7 +389,7 @@ row :: proc(h: Maybe(f32) = nil, item_widths := []f32{}) -> bool {
     // if the size is 0, return false (we don't draw the content)
     if value, ok := size.?; ok && value == 0 do return false
 
-    layout_push(Layout_Info{
+    layout_push(Layout{
         mode = .Row,
         item_sizes = item_widths,
         size = size,
@@ -412,10 +421,6 @@ box :: proc(w, h: f32) -> bool {
     begin_scissor_mode(layout.xoffset, layout.yoffset, w, h)
     return true
 }
-
-// pane ////////////////////////////////////////////////////////////////////////
-
-// just allow to change the background and border colors
 
 // button //////////////////////////////////////////////////////////////////////
 
