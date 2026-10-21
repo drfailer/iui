@@ -100,11 +100,11 @@ Button_Style :: struct {
 
 style_button := Button_Style{
     padding          = {4, 4, 4, 4},
-    text_color       = {255, 255, 255, 255},
-    color            = {32, 32, 32, 255},
-    hover_color      = {48, 48, 48, 255},
-    pressed_color    = {16, 16, 16, 255},
-    border_color     = {0, 0, 0, 255},
+    text_color       = {185, 148, 104, 255},
+    color            = {0, 0, 0, 255},
+    hover_color      = {46, 46, 46, 255},
+    pressed_color    = {0, 0, 0, 255},
+    border_color     = {19, 19, 19, 255},
     border_thickness = 1,
     corner_radius    = 0,
 }
@@ -121,13 +121,13 @@ Text_Input_Style :: struct {
 }
 
 style_text_input := Text_Input_Style{
-    idle_background_color    = rl.Color{48, 48, 48, 255},
-    focused_background_color = rl.Color{32, 32, 32, 255},
-    caret_color              = rl.Color{255, 255, 255, 255},
-    border_color             = rl.Color{0, 0, 0, 255},
-    selection_color          = rl.Color{100, 100, 100, 255},
-    text_color               = rl.Color{255, 255, 255, 255},
-    selected_text_color      = rl.Color{255, 255, 255, 255},
+    idle_background_color    = rl.Color{0, 0, 0, 255},
+    focused_background_color = rl.Color{10, 10, 10, 255},
+    caret_color              = rl.Color{255, 207, 170, 255},
+    border_color             = rl.Color{19, 19, 19, 255},
+    selection_color          = rl.Color{46, 46, 46, 255},
+    text_color               = rl.Color{185, 148, 104, 255},
+    selected_text_color      = rl.Color{185, 148, 104, 255},
     padding                  = Padding{2, 2, 2, 2},
 }
 

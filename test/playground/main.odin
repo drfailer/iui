@@ -27,7 +27,7 @@ main :: proc() {
     defer rl.UnloadFont(ui.style_ui.font)
 
     for !rl.WindowShouldClose() {
-        rl.ClearBackground(rl.GetColor(0x303030ff))
+        rl.ClearBackground(rl.GetColor(0x000000ff))
         ui.init_frame()
 
         if ui.pane({255, 255, 0, 255}) {
