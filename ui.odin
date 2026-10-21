@@ -1,5 +1,10 @@
 package ui
 
+// Design choice:
+// - we don't store component data:
+//   @(static) window_data: ui.Window
+//   ui.window(&window_data) {}
+
 import "base:runtime"
 import "core:hash"
 import "core:mem"
@@ -11,11 +16,12 @@ import rl "vendor:raylib"
 
 // constants ///////////////////////////////////////////////////////////////////
 
-SCRATCH_MEMORY_SIZE :: #config(UI_SCRATCH_MEMORY_SIZE, 1024)
-LAYOUT_STACK_SIZE   :: #config(UI_LAYOUT_STACK_SIZE, 32)
+SCRATCH_MEMORY_SIZE  :: #config(UI_SCRATCH_MEMORY_SIZE,  1024)
+LAYOUT_STACK_SIZE    :: #config(UI_LAYOUT_STACK_SIZE,    16)
+CONTAINER_STACK_SIZE :: #config(UI_CONTAINER_STACK_SIZE, 16)
 
 EDIT_UNDO_STATE_SCRATCH_CAPACITY :: #config(UI_EDIT_UNDO_STATE_SCRATCH_CAPACITY, 1024)
-EDIT_UNDO_TEXT_SCRATCH_CAPACITY:: #config(UI_EDIT_UNDO_TEXT_SCRATCH_CAPACITY, 1024)
+EDIT_UNDO_TEXT_SCRATCH_CAPACITY  :: #config(UI_EDIT_UNDO_TEXT_SCRATCH_CAPACITY,  1024)
 
 // types ///////////////////////////////////////////////////////////////////////
 
@@ -23,8 +29,6 @@ Id :: #type u32
 
 Padding :: struct { l, r, t, b: f32 }
 
-// TODO: we need a dedicated container struct and container stack
-// TODO: pushing a container should push a column layout (so we can access the size of the layout when poping the container, then update the parent layout)
 // TODO: offset and w/h should be merged
 // TODO: if we use a stack instead of a que for commands what doesn it change:
 // - it changes the draw order
@@ -47,7 +51,7 @@ Layout :: struct {
     padding       : Padding,
     item_spacing  : f32,
     item_sizes    : []f32,
-    size          : Maybe(f32), // TODO: we should use a negative size instead of maybe (smaller)
+    size          : f32, // TODO: we should use a negative size instead of maybe (smaller)
     item_index    : int,
 }
 
@@ -74,11 +78,60 @@ global_measure_text_proc : Measure_Text_Proc
 global_mouse_position  : [2]f32
 global_mouse_left_down : bool
 
-global_layout_stack : [dynamic; LAYOUT_STACK_SIZE]Layout
+global_layout_stack    : [dynamic; LAYOUT_STACK_SIZE]Layout
+global_container_stack : [dynamic; CONTAINER_STACK_SIZE]Container
 
 global_edit_undo_state_scratch : mem.Scratch
 global_edit_undo_text_scratch  : mem.Scratch
 global_edit_state              : edit.State
+
+// styles //////////////////////////////////////////////////////////////////////
+
+Button_Style :: struct {
+    padding          : Padding,
+    text_color       : rl.Color,
+    color            : rl.Color,
+    hover_color      : rl.Color,
+    pressed_color    : rl.Color,
+    border_color     : rl.Color,
+    border_thickness : f32,
+    corner_radius    : f32,
+}
+
+style_button := Button_Style{
+    padding          = {4, 4, 4, 4},
+    text_color       = {255, 255, 255, 255},
+    color            = {32, 32, 32, 255},
+    hover_color      = {48, 48, 48, 255},
+    pressed_color    = {16, 16, 16, 255},
+    border_color     = {0, 0, 0, 255},
+    border_thickness = 1,
+    corner_radius    = 0,
+}
+
+Text_Input_Style :: struct {
+    idle_background_color : rl.Color,
+    focused_background_color : rl.Color,
+    caret_color : rl.Color,
+    border_color : rl.Color,
+    selection_color : rl.Color,
+    text_color : rl.Color,
+    selected_text_color : rl.Color,
+    padding : Padding,
+}
+
+style_text_input := Text_Input_Style{
+    idle_background_color    = rl.Color{48, 48, 48, 255},
+    focused_background_color = rl.Color{32, 32, 32, 255},
+    caret_color              = rl.Color{255, 255, 255, 255},
+    border_color             = rl.Color{0, 0, 0, 255},
+    selection_color          = rl.Color{100, 100, 100, 255},
+    text_color               = rl.Color{255, 255, 255, 255},
+    selected_text_color      = rl.Color{255, 255, 255, 255},
+    padding                  = Padding{2, 2, 2, 2},
+}
+
+TEXT_INPUT_CARET_SIZE :: 2
 
 // init / fini /////////////////////////////////////////////////////////////////
 
@@ -115,6 +168,10 @@ init_frame :: proc() {
     // reset layout stack
     clear(&global_layout_stack)
     append(&global_layout_stack, Layout{})
+
+    // reset container stack
+    clear(&global_container_stack)
+    append(&global_container_stack, Container{})
 
     // get events (things can change within a frame so we collect at the start)
     global_mouse_position = rl.GetMousePosition()
@@ -201,6 +258,16 @@ end_scissor_mode :: proc() {
 
 // layout ///////////////////////////////////////////////////////////////////////
 
+get_layout :: proc() -> ^Layout {
+    return &global_layout_stack[len(global_layout_stack) - 1]
+}
+
+get_parent_layout :: proc() -> ^Layout {
+    stack_size := len(global_layout_stack)
+    if stack_size < 2 do return nil
+    return &global_layout_stack[stack_size - 2]
+}
+
 //
 // Floating layout function allow to push and pop standalone layouts that are
 // not integrated in the current layout (ex: start a new layout for a floating
@@ -220,19 +287,23 @@ layout_pop_floating :: proc() {
 // offsets of the new layout before push and after pop).
 //
 
-layout_push :: proc(info: Layout) {
+layout_push :: proc(layout: Layout) {
     current := get_layout()
     // update the offsets
-    info := info
-    if info.xoffset == 0 {
-        info.xoffset += current.xoffset
+    layout := layout
+    if layout.xoffset == 0 {
+        layout.xoffset += current.xoffset
     }
-    if info.yoffset == 0 {
-        info.yoffset += current.yoffset
+    if layout.yoffset == 0 {
+        layout.yoffset += current.yoffset
     }
-    info.x = info.xoffset
-    info.y = info.yoffset
-    layout_push_floating(info)
+    layout.x = layout.xoffset
+    layout.y = layout.yoffset
+    layout.xoffset += layout.padding.l
+    layout.yoffset += layout.padding.t
+    layout.w += layout.padding.l
+    layout.h += layout.padding.t
+    layout_push_floating(layout)
 }
 
 layout_pop :: proc() {
@@ -242,6 +313,7 @@ layout_pop :: proc() {
         h -= old_layout.item_spacing
     } else {
         w -= old_layout.item_spacing
+
     }
     w += old_layout.padding.r
     h += old_layout.padding.b
@@ -269,18 +341,8 @@ layout_update :: proc(w, h: f32) {
 }
 
 //
-// Helpers for interacting with the current layout, update the style, ...
+// layout items sizes
 //
-
-get_layout :: proc() -> ^Layout {
-    return &global_layout_stack[len(global_layout_stack) - 1]
-}
-
-get_parent_layout :: proc() -> ^Layout {
-    stack_size := len(global_layout_stack)
-    if stack_size < 2 do return nil
-    return &global_layout_stack[stack_size - 2]
-}
 
 get_layout_item_size :: proc() -> (size: Maybe(f32)) {
     layout := get_layout()
@@ -289,29 +351,16 @@ get_layout_item_size :: proc() -> (size: Maybe(f32)) {
     } else if len(layout.item_sizes) > 0 {
         size = layout.item_sizes[len(layout.item_sizes) - 1]
     }
-    if value, ok := size.?; ok && value < 0 {
+    if value, ok := size.?; ok && value <= 0 {
         return nil
     }
     return size
 }
 
-set_layout_padding :: proc(padding: Padding) {
-    layout := get_layout()
-    layout.padding = padding
-    // this function should be called right after a new layout is pushed so we
-    // also updated the offsets
-    layout.xoffset += padding.l
-    layout.yoffset += padding.t
-}
-
-set_layout_item_spacing  :: proc(value: f32) {
-    get_layout().item_spacing = value
-}
-
 compute_layout_item_width :: proc(w: f32) -> f32 {
     layout := get_layout()
     if layout.mode == .Column {
-        return layout.size.? or_else w
+        return w if layout.size <= 0 else layout.size
     }
     return get_layout_item_size().? or_else w
 }
@@ -319,7 +368,7 @@ compute_layout_item_width :: proc(w: f32) -> f32 {
 compute_layout_item_height :: proc(h: f32) -> f32 {
     layout := get_layout()
     if layout.mode == .Row {
-        return layout.size.? or_else h
+        return h if layout.size <= 0 else layout.size
     }
     return get_layout_item_size().? or_else h
 }
@@ -333,8 +382,7 @@ compute_layout_item_height :: proc(h: f32) -> f32 {
 //
 // The item size can have the folowing value:
 // - empty slice (default value): no size is specified.
-// - negative item size: don't specify a size for this item.
-// - 0 size for an item: don't draw the item.
+// - 0: don't specify a size for this item.
 // - If there more items than sizes specified in the slice, the last size value
 //   is used for the remaining items.
 //
@@ -348,51 +396,49 @@ compute_layout_item_height :: proc(h: f32) -> f32 {
 // - w should be set to -1 instead of maybe?
 
 @(deferred_out=layout_pop_conditional)
-column :: proc(w: Maybe(f32) = nil, item_heights := []f32{}) -> bool {
+column :: proc(w: f32 = 0, item_heights := []f32{}, padding: Padding = {}, item_spacing: f32 = 0) -> bool {
     size := w
 
     // when the size is unspecified, we try to deduce it from the parent
-    if size == nil {
+    if size <= 0 {
         parent_layout := get_layout()
         if parent_layout.mode == .Column {
             size = parent_layout.size
         } else {
-            size = get_layout_item_size()
+            size = get_layout_item_size().? or_else 0
         }
     }
-
-    // if the size is 0, return false (we don't draw the content)
-    if value, ok := size.?; ok && value == 0 do return false
 
     layout_push(Layout{
         mode = .Column,
         item_sizes = item_heights,
         size = size,
+        padding = padding,
+        item_spacing = item_spacing,
     })
     return true
 }
 
 @(deferred_out=layout_pop_conditional)
-row :: proc(h: Maybe(f32) = nil, item_widths := []f32{}) -> bool {
+row :: proc(h: f32 = 0, item_widths := []f32{}, padding: Padding = {}, item_spacing: f32 = 0) -> bool {
     size := h
 
     // when the size is unspecified, we try to deduce it from the parent
-    if size == nil {
+    if size <= 0 {
         parent_layout := get_layout()
         if parent_layout.mode == .Row {
             size = parent_layout.size
         } else {
-            size = get_layout_item_size()
+            size = get_layout_item_size().? or_else 0
         }
     }
-
-    // if the size is 0, return false (we don't draw the content)
-    if value, ok := size.?; ok && value == 0 do return false
 
     layout_push(Layout{
         mode = .Row,
         item_sizes = item_widths,
         size = size,
+        padding = padding,
+        item_spacing = item_spacing,
     })
     return true
 }
@@ -422,29 +468,93 @@ box :: proc(w, h: f32) -> bool {
     return true
 }
 
+// container ////////////////////////////////////////////////////////////////////
+
+// TODO: just using the stack for containers might not be sufficient (we can't have multiple roots which might be required for floating windows and popups)
+// -> perhaps we just need the stack if we have a floating version like for the layouts
+
+get_container :: proc() -> ^Container {
+    return &global_container_stack[len(global_container_stack) - 1]
+}
+
+//
+// Floating containers.
+//
+
+container_push_floating :: proc(container: Container) {
+    append(&global_container_stack, container)
+    layout_push_floating({
+        mode    = .Column,
+        xoffset = container.x,
+        yoffset = container.y,
+        x       = container.x,
+        y       = container.y,
+        w       = container.w,
+        h       = container.h,
+        size    = container.h,
+    })
+    new_container := get_container()
+    new_container.command_index = cast(i32)len(global_draw_queue)
+    begin_scissor_mode(container.x, container.y, container.w, container.h)
+}
+
+container_pop_floating :: proc() {
+    container := get_container()
+    layout    := get_layout()
+    cmd       := &global_draw_queue[container.command_index].(Scissor)
+
+    if container.w <= 0 {
+        container.w = layout.w
+        cmd.w = layout.w
+    }
+    if container.h <= 0 {
+        container.h = layout.h
+        cmd.h = layout.h
+    }
+    pop(&global_container_stack)
+    pop(&global_layout_stack)
+    end_scissor_mode()
+}
+
+//
+// Managed containers.
+//
+
+container_push :: proc(container: Container) {
+    container := container
+    layout    := get_layout()
+    container.x = layout.xoffset
+    container.y = layout.yoffset
+    container_push_floating(container)
+}
+
+container_pop :: proc() {
+    container := get_container()
+    w, h := container.w, container.h
+    container_pop_floating()
+    layout_update(w, h)
+}
+
+// pane ////////////////////////////////////////////////////////////////////////
+
+end_pane :: proc() {
+    container := get_container()
+    layout    := get_layout()
+    cmd       := &global_draw_queue[container.command_index + 1].(Rect)
+    cmd.w = layout.w + layout.padding.r
+    cmd.h = layout.h + layout.padding.b
+    container_pop()
+}
+
+@(deferred_none=end_pane)
+pane :: proc(bg_color: rl.Color) -> bool {
+    container_push({})
+    layout := get_layout()
+    draw_rect(layout.xoffset, layout.yoffset, 0, 0, bg_color)
+    return true
+}
+
 // button //////////////////////////////////////////////////////////////////////
-
-Button_Style :: struct {
-    padding          : Padding,
-    text_color       : rl.Color,
-    color            : rl.Color,
-    hover_color      : rl.Color,
-    pressed_color    : rl.Color,
-    border_color     : rl.Color,
-    border_thickness : f32,
-    corner_radius    : f32,
-}
-
-style_button := Button_Style{
-    padding          = {4, 4, 4, 4},
-    text_color       = {255, 255, 255, 255},
-    color            = {32, 32, 32, 255},
-    hover_color      = {48, 48, 48, 255},
-    pressed_color    = {16, 16, 16, 255},
-    border_color     = {0, 0, 0, 255},
-    border_thickness = 1,
-    corner_radius    = 0,
-}
 
 button_floating :: proc(label: string, x, y, w, h: f32, index := 0, loc := #caller_location) -> (clicked: bool) {
     id := get_id(loc, index)
@@ -501,6 +611,7 @@ button_floating :: proc(label: string, x, y, w, h: f32, index := 0, loc := #call
     return clicked
 }
 
+// TODO: add optional width and height configuration?
 button_label :: proc(label: string, index := 0, loc := #caller_location) -> (clicked: bool) {
     layout := get_layout()
     text_size := measure_text(label)
@@ -527,30 +638,6 @@ button :: proc{
 // header //////////////////////////////////////////////////////////////////////
 
 // text input //////////////////////////////////////////////////////////////////
-
-TEXT_INPUT_CARET_SIZE :: 2
-
-Text_Input_Style :: struct {
-    idle_background_color : rl.Color,
-    focused_background_color : rl.Color,
-    caret_color : rl.Color,
-    border_color : rl.Color,
-    selection_color : rl.Color,
-    text_color : rl.Color,
-    selected_text_color : rl.Color,
-    padding : Padding,
-}
-
-style_text_input := Text_Input_Style{
-    idle_background_color    = rl.Color{48, 48, 48, 255},
-    focused_background_color = rl.Color{32, 32, 32, 255},
-    caret_color              = rl.Color{255, 255, 255, 255},
-    border_color             = rl.Color{0, 0, 0, 255},
-    selection_color          = rl.Color{100, 100, 100, 255},
-    text_color               = rl.Color{255, 255, 255, 255},
-    selected_text_color      = rl.Color{255, 255, 255, 255},
-    padding                  = Padding{2, 2, 2, 2},
-}
 
 text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, index := 0, loc := #caller_location) -> (submitted: bool) {
     @(static) scroll_xoffset : f32 = 0 // used to scroll the text when it goes out of the box
