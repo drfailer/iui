@@ -29,11 +29,6 @@ Id :: #type u32
 Padding :: struct { l, r, t, b: f32 }
 
 // TODO: offset and w/h should be merged
-// TODO: if we use a stack instead of a que for commands what doesn it change:
-// - it changes the draw order
-// - better for container background colors
-// - might be counter intuitive in the windgets (invert the draw order)
-// - does it cause issues on the user side? -> it will (draw 2 floating buttons, the stack will change the draw order)
 
 Container :: struct {
     x, y, h, w : f32,
@@ -229,8 +224,6 @@ draw_rect :: proc(x, y, w, h: f32, color: rl.Color, corner_radius: f32 = 0) {
     append(&global_draw_queue, Rect{x, y, w, h, corner_radius, color})
 }
 
-// TODO: switch to procedure group instead of maybe (faster)
-
 draw_text :: proc(text: string, x, y: f32, color: rl.Color, font: Maybe(rl.Font) = nil, font_size: Maybe(f32) = nil) {
     font      := font.?      or_else style_ui.font
     font_size := font_size.? or_else style_ui.font_size
@@ -296,22 +289,19 @@ layout_push :: proc(layout: Layout) {
     layout.y = layout.yoffset
     layout.xoffset += layout.padding.l
     layout.yoffset += layout.padding.t
-    layout.w += layout.padding.l
-    layout.h += layout.padding.t
     layout_push_floating(layout)
 }
 
 layout_pop :: proc() {
-    old_layout := get_layout()
-    w, h := old_layout.w, old_layout.h
-    if old_layout.mode == .Column {
-        h -= old_layout.item_spacing
+    layout := get_layout()
+    w, h := layout.w, layout.h
+    if layout.mode == .Column {
+        h -= layout.item_spacing
     } else {
-        w -= old_layout.item_spacing
-
+        w -= layout.item_spacing
     }
-    w += old_layout.padding.r
-    h += old_layout.padding.b
+    w += layout.padding.l + layout.padding.r
+    h += layout.padding.t + layout.padding.b
     layout_pop_floating()
     layout_update(w, h)
 }
@@ -386,11 +376,7 @@ compute_layout_item_height :: proc(h: f32) -> f32 {
 // Push column and row layouts (made to be used within an if statement).
 //
 
-// TODO: we need versions that take a color as argument
-// - we can use named arguments!!!! -> we could add all the options (including padding, would make more sens and be safer)
-// - w should be set to -1 instead of maybe?
-
-@(deferred_out=layout_pop_conditional)
+@(deferred_none=layout_pop)
 column :: proc(w: f32 = 0, item_heights := []f32{}, padding: Padding = {}, item_spacing: f32 = 0) -> bool {
     size := w
 
@@ -414,7 +400,7 @@ column :: proc(w: f32 = 0, item_heights := []f32{}, padding: Padding = {}, item_
     return true
 }
 
-@(deferred_out=layout_pop_conditional)
+@(deferred_none=layout_pop)
 row :: proc(h: f32 = 0, item_widths := []f32{}, padding: Padding = {}, item_spacing: f32 = 0) -> bool {
     size := h
 
@@ -437,14 +423,6 @@ row :: proc(h: f32 = 0, item_widths := []f32{}, padding: Padding = {}, item_spac
     })
     return true
 }
-
-// pop when the layout has been applied
-layout_pop_conditional :: proc(pop: bool) {
-    if pop do layout_pop()
-    layout := get_layout()
-    layout.item_index += 1 // make sure the item is advanced
-}
-
 
 //
 // When the layout needs to be more complicated than columns and rows, users
@@ -472,44 +450,7 @@ get_container :: proc() -> ^Container {
     return &global_container_stack[len(global_container_stack) - 1]
 }
 
-//
-// Floating containers.
-//
-
-container_push_floating :: proc(container: Container) {
-    append(&global_container_stack, container)
-    layout_push_floating({
-        mode    = .Column,
-        xoffset = container.x,
-        yoffset = container.y,
-        x       = container.x,
-        y       = container.y,
-        w       = container.w,
-        h       = container.h,
-        size    = container.h,
-    })
-    new_container := get_container()
-    new_container.command_index = cast(i32)len(global_draw_queue)
-    begin_scissor_mode(container.x, container.y, container.w, container.h)
-}
-
-container_pop_floating :: proc() {
-    container := get_container()
-    layout    := get_layout()
-    cmd       := &global_draw_queue[container.command_index].(Scissor)
-
-    if container.w <= 0 {
-        container.w = layout.w
-        cmd.w = layout.w
-    }
-    if container.h <= 0 {
-        container.h = layout.h
-        cmd.h = layout.h
-    }
-    pop(&global_container_stack)
-    pop(&global_layout_stack)
-    end_scissor_mode()
-}
+// TODO: floating containers
 
 //
 // Managed containers.
@@ -517,17 +458,25 @@ container_pop_floating :: proc() {
 
 container_push :: proc(container: Container) {
     container := container
-    layout    := get_layout()
-    container.x = layout.xoffset
-    container.y = layout.yoffset
-    container_push_floating(container)
+    container.command_index = cast(i32)len(global_draw_queue)
+    begin_scissor_mode(container.x, container.y, container.w, container.h)
+    layout_push(Layout{})
+    append(&global_container_stack, container)
 }
 
 container_pop :: proc() {
+    layout    := get_layout()
     container := get_container()
-    w, h := container.w, container.h
-    container_pop_floating()
-    layout_update(w, h)
+    cmd       := &global_draw_queue[container.command_index].(Scissor)
+
+    // we update the scissor area with the proper size of the container is
+    // resizable (no change on fixed sizes)
+    if container.w <= 0 do cmd.w = layout.w
+    if container.h <= 0 do cmd.h = layout.h
+
+    pop(&global_container_stack)
+    layout_pop()
+    end_scissor_mode()
 }
 
 // pane ////////////////////////////////////////////////////////////////////////
@@ -606,13 +555,12 @@ button_floating :: proc(label: string, x, y, w, h: f32, index := 0, loc := #call
     return clicked
 }
 
-// TODO: add optional width and height configuration?
-button_label :: proc(label: string, index := 0, loc := #caller_location) -> (clicked: bool) {
+button_label :: proc(label: string, w: Maybe(f32) = nil, h: Maybe(f32) = nil, index := 0, loc := #caller_location) -> (clicked: bool) {
     layout := get_layout()
     text_size := measure_text(label)
     padding := style_button.padding
-    w := compute_layout_item_width(text_size.x + padding.l + padding.r)
-    h := compute_layout_item_height(text_size.y + padding.t + padding.b)
+    w := w.? or_else compute_layout_item_width(text_size.x + padding.l + padding.r)
+    h := h.? or_else compute_layout_item_height(text_size.y + padding.t + padding.b)
     if w > 0 && h > 0 {
         clicked = button_floating(label, layout.xoffset, layout.yoffset, w, h, index, loc)
     }

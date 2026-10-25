@@ -22,12 +22,13 @@ main :: proc() {
     ui.init()
     defer ui.fini()
 
-    ui.style_ui.font      = rl.LoadFontEx("/usr/share/fonts/TTF/IBMPlexMono-Regular.ttf", FONT_SIZE, nil, 0)
+    // ui.style_ui.font      = rl.LoadFontEx("/usr/share/fonts/TTF/IBMPlexMono-Regular.ttf", FONT_SIZE, nil, 0)
+    ui.style_ui.font      = rl.LoadFontEx("/usr/share/fonts/liberation-sans-fonts/LiberationSans-Regular.ttf", FONT_SIZE, nil, 0)
     ui.style_ui.font_size = FONT_SIZE
     defer rl.UnloadFont(ui.style_ui.font)
 
     for !rl.WindowShouldClose() {
-        rl.ClearBackground(rl.GetColor(0x000000ff))
+        rl.ClearBackground(rl.GetColor(0x222222ff))
         ui.init_frame()
 
         if ui.pane({255, 255, 0, 255}) {
@@ -63,7 +64,7 @@ main :: proc() {
             }
         }
 
-        if ui.text_input_floating(&input_builder, 100, 100, 200, 200) {
+        if ui.text_input_floating(&input_builder, 100, 250, 200, 200) {
             fmt.println("text submitted: ", strings.to_string(input_builder))
         }
 
