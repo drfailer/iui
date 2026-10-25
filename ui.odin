@@ -553,7 +553,7 @@ is_component_clicked :: proc(id: Id, x, y, w, h: f32) -> (clicked: bool) {
 
 // button //////////////////////////////////////////////////////////////////////
 
-button_floating :: proc(label: string, x, y, w, h: f32, loc := #caller_location) -> (clicked: bool) {
+button_floating :: proc(x, y, w, h: f32, label: string, loc := #caller_location) -> (clicked: bool) {
     id := get_id(loc)
 
     clicked = is_component_clicked(id, x, y, w, h)
@@ -599,7 +599,7 @@ button_label :: proc(label: string, w: Maybe(f32) = nil, h: Maybe(f32) = nil, in
     w := w.? or_else compute_layout_item_width(text_size.x + padding.l + padding.r)
     h := h.? or_else compute_layout_item_height(text_size.y + padding.t + padding.b)
     if w > 0 && h > 0 {
-        clicked = button_floating(label, layout.xoffset, layout.yoffset, w, h, loc)
+        clicked = button_floating(layout.xoffset, layout.yoffset, w, h, label, loc)
     }
     layout_update(w, h)
     return clicked
