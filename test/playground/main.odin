@@ -88,6 +88,11 @@ main :: proc() {
             fmt.println("text submitted: ", strings.to_string(input_builder))
         }
 
+        @(static) value := 50
+        if ui.slider_floating(400, 250, 16, 60, 0, 100, &value) {
+            fmt.println("value changed:", value)
+        }
+
         ui.fini_frame()
     }
 }

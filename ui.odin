@@ -15,6 +15,8 @@ import "core:c"
 import rl "vendor:raylib"
 
 // TODO: z indexing support
+// TODO: pane border
+// TODO: scrollbox
 
 // constants ///////////////////////////////////////////////////////////////////
 
@@ -123,6 +125,14 @@ style_checkbox := Checkbox_Style{
 
 CHECKBOX_BORDER_SIZE   :: 1
 CHECKBOX_LABEL_SPACING :: 4
+
+Slider_Style :: struct {
+}
+
+style_slider := Slider_Style{
+}
+
+SLIDER_THUMB_WIDTH :: 4
 
 Text_Input_Style :: struct {
     idle_background_color : rl.Color,
@@ -508,6 +518,8 @@ container_pop :: proc() {
 
 // pane ////////////////////////////////////////////////////////////////////////
 
+// TODO: floating pane
+
 end_pane :: proc() {
     container := get_container()
     layout    := get_layout()
@@ -524,6 +536,10 @@ pane :: proc(bg_color: rl.Color) -> bool {
     draw_rect(layout.xoffset, layout.yoffset, 0, 0, bg_color)
     return true
 }
+
+// window //////////////////////////////////////////////////////////////////////
+
+// TODO: popup and dragable windows?
 
 // component utility functions /////////////////////////////////////////////////
 
@@ -550,6 +566,15 @@ is_component_clicked :: proc(id: Id, x, y, w, h: f32) -> (clicked: bool) {
     }
     return
 }
+
+// text ////////////////////////////////////////////////////////////////////////
+
+// TODO
+
+
+// image ///////////////////////////////////////////////////////////////////////
+
+// TODO
 
 // button //////////////////////////////////////////////////////////////////////
 
@@ -647,6 +672,35 @@ checkbox :: proc(label: string, checked: ^bool, loc := #caller_location) -> (cli
 }
 
 // slider //////////////////////////////////////////////////////////////////////
+
+// TODO:
+// - we need multiple styles for this (round thumb, line/rectangle, display value?, ...)
+
+slider_floating :: proc(x, y, h, w: f32, min, max: $T, value: ^T, loc := #caller_location) -> (updated: bool) {
+    id := get_id(loc)
+    value_range := cast(f32)(max - min)
+
+    if global_active_id == 0 || global_active_id == id {
+        if rl.CheckCollisionPointRec(global_mouse_position, {x, y, w, h}) {
+            global_hot_id = id
+            if global_mouse_left_down {
+                global_active_id = id
+            }
+        }
+    }
+
+    if global_active_id == id {
+        ratio := clamp(global_mouse_position.x - x, 0, w) / w
+        new_value := cast(T)(ratio * value_range)
+        updated = new_value != value^
+        value^ = new_value
+    }
+    thumb_x := w * (cast(f32)value^ / value_range)
+
+    draw_rect(x, y + h/2, w, 1, {255, 255, 255, 255})
+    draw_rect(x + thumb_x - SLIDER_THUMB_WIDTH/2, y, SLIDER_THUMB_WIDTH, h, {255, 255, 255, 255})
+    return
+}
 
 // header //////////////////////////////////////////////////////////////////////
 
