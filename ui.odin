@@ -82,6 +82,13 @@ global_edit_state              : edit.State
 
 // styles //////////////////////////////////////////////////////////////////////
 
+UI_Style :: struct {
+    font      : rl.Font,
+    font_size : f32,
+}
+
+style_ui := UI_Style{}
+
 Button_Style :: struct {
     padding          : Padding,
     text_color       : rl.Color,
@@ -103,6 +110,19 @@ style_button := Button_Style{
     border_thickness = 1,
     corner_radius    = 0,
 }
+
+Checkbox_Style :: struct {
+    box_color   : rl.Color,
+    label_color : rl.Color,
+}
+
+style_checkbox := Checkbox_Style{
+    box_color   = {185, 148, 104, 255},
+    label_color = {185, 148, 104, 255},
+}
+
+CHECKBOX_BORDER_SIZE   :: 1
+CHECKBOX_LABEL_SPACING :: 4
 
 Text_Input_Style :: struct {
     idle_background_color : rl.Color,
@@ -129,13 +149,6 @@ style_text_input := Text_Input_Style{
 TEXT_INPUT_CARET_SIZE :: 2
 
 // init / fini /////////////////////////////////////////////////////////////////
-
-UI_Style :: struct {
-    font      : rl.Font,
-    font_size : f32,
-}
-
-style_ui := UI_Style{}
 
 init :: proc() {
     global_hot_id = 0
@@ -512,11 +525,12 @@ pane :: proc(bg_color: rl.Color) -> bool {
     return true
 }
 
-// button //////////////////////////////////////////////////////////////////////
+// component utility functions /////////////////////////////////////////////////
 
-button_floating :: proc(label: string, x, y, w, h: f32, loc := #caller_location) -> (clicked: bool) {
-    id := get_id(loc)
-
+//
+// Logic for clickable components
+//
+is_component_clicked :: proc(id: Id, x, y, w, h: f32) -> (clicked: bool) {
     if global_active_id == 0 || global_active_id == id {
         if rl.CheckCollisionPointRec(global_mouse_position, {x, y, w, h}) {
             global_hot_id = id
@@ -534,6 +548,15 @@ button_floating :: proc(label: string, x, y, w, h: f32, loc := #caller_location)
             }
         }
     }
+    return
+}
+
+// button //////////////////////////////////////////////////////////////////////
+
+button_floating :: proc(label: string, x, y, w, h: f32, loc := #caller_location) -> (clicked: bool) {
+    id := get_id(loc)
+
+    clicked = is_component_clicked(id, x, y, w, h)
 
     // draw
     x, y, w, h := x, y, w, h
@@ -589,6 +612,39 @@ button :: proc{
 }
 
 // checkbox ////////////////////////////////////////////////////////////////////
+
+checkbox_floating :: proc(x, y, h, w: f32, label: string, checked: ^bool, loc := #caller_location) -> (clicked: bool) {
+    id       := get_id(loc)
+    box_size := style_ui.font_size
+
+    clicked = is_component_clicked(id, x, y, box_size, box_size)
+
+    if clicked {
+        checked^ = !(checked^)
+    }
+
+    draw_rect(x,                                y,                                   box_size,             CHECKBOX_BORDER_SIZE, style_checkbox.box_color)
+    draw_rect(x,                                y,                                   CHECKBOX_BORDER_SIZE, box_size,             style_checkbox.box_color)
+    draw_rect(x,                                y + box_size - CHECKBOX_BORDER_SIZE, box_size,             CHECKBOX_BORDER_SIZE, style_checkbox.box_color)
+    draw_rect(x + box_size - CHECKBOX_BORDER_SIZE, y,                                CHECKBOX_BORDER_SIZE, box_size,             style_checkbox.box_color)
+    if checked^ {
+        draw_rect(x + 4, y + 4, box_size - 8, box_size - 8, style_checkbox.box_color)
+    }
+    draw_text(label, x + box_size + CHECKBOX_LABEL_SPACING, y, style_checkbox.label_color)
+
+    return clicked
+}
+
+checkbox :: proc(label: string, checked: ^bool, loc := #caller_location) -> (clicked: bool) {
+    layout    := get_layout()
+    text_size := measure_text(label)
+    assert(text_size.y == style_ui.font_size)
+    w := style_ui.font_size + CHECKBOX_LABEL_SPACING + text_size.x
+    h := style_ui.font_size
+    clicked = checkbox_floating(layout.xoffset, layout.yoffset, w, h, label, checked, loc)
+    layout_update(w, h)
+    return clicked
+}
 
 // slider //////////////////////////////////////////////////////////////////////
 

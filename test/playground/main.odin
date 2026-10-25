@@ -60,7 +60,27 @@ main :: proc() {
                     layout := ui.get_layout()
                     ui.draw_rect(layout.xoffset, layout.yoffset, 200, 200, {255, 0, 0, 255})
                 }
-                ui.button("Second row button")
+
+                if ui.column(100, item_spacing = 4) {
+                    @(static) opt1: bool
+                    if ui.checkbox("opt1", &opt1) {
+                        fmt.println("opt1:", opt1)
+                    }
+
+                    @(static) opt2: bool
+                    if ui.checkbox("opt2", &opt2) {
+                        fmt.println("opt2:", opt2)
+                    }
+
+                    @(static) opt3: bool
+                    if ui.checkbox("opt3", &opt3) {
+                        fmt.println("opt3:", opt3)
+                    }
+
+                    if ui.button("submit") {
+                        fmt.println("submit")
+                    }
+                }
             }
         }
 
