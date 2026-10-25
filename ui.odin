@@ -14,10 +14,13 @@ import "core:fmt"
 import "core:c"
 import rl "vendor:raylib"
 
+// TODO: z indexing support
+
 // constants ///////////////////////////////////////////////////////////////////
 
 LAYOUT_STACK_SIZE    :: #config(UI_LAYOUT_STACK_SIZE,    16)
 CONTAINER_STACK_SIZE :: #config(UI_CONTAINER_STACK_SIZE, 16)
+ID_STACK_SIZE        :: #config(UI_ID_STACK_SIZE, 32)
 
 EDIT_UNDO_STATE_SCRATCH_CAPACITY :: #config(UI_EDIT_UNDO_STATE_SCRATCH_CAPACITY, 1024)
 EDIT_UNDO_TEXT_SCRATCH_CAPACITY  :: #config(UI_EDIT_UNDO_TEXT_SCRATCH_CAPACITY,  1024)
@@ -45,7 +48,7 @@ Layout :: struct {
     padding       : Padding,
     item_spacing  : f32,
     item_sizes    : []f32,
-    size          : f32, // TODO: we should use a negative size instead of maybe (smaller)
+    size          : f32,
     item_index    : int,
 }
 
@@ -71,6 +74,7 @@ global_mouse_left_down : bool
 
 global_layout_stack    : [dynamic; LAYOUT_STACK_SIZE]Layout
 global_container_stack : [dynamic; CONTAINER_STACK_SIZE]Container
+global_id_stack        : [dynamic; ID_STACK_SIZE]int
 
 global_edit_undo_state_scratch : mem.Scratch
 global_edit_undo_text_scratch  : mem.Scratch
@@ -200,11 +204,24 @@ fini_frame :: proc() {
 
 // id & draw ///////////////////////////////////////////////////////////////////
 
+push_id :: proc(id: int) {
+    append(&global_id_stack, id)
+}
+
+pop_id :: proc(id: int) {
+    pop(&global_id_stack)
+}
+
+id_stack_top :: proc() -> int {
+    if len(global_id_stack) == 0 do return 0
+    return global_id_stack[len(global_id_stack) - 1]
+}
+
 //
-// The id is generated using: [user index|8][source line|8][source file path address|8]
+// The id is generated using: [id stack top|8][source line|8][source file path address|8]
 //
-get_id :: proc(loc: runtime.Source_Code_Location, index: int) -> Id {
-    index     := index
+get_id :: proc(loc: runtime.Source_Code_Location) -> Id {
+    pushed_id := id_stack_top()
     line      := loc.line
     path_addr := raw_data(loc.file_path)
     data, err := mem.alloc_bytes_non_zeroed(2*size_of(int) + size_of(rawptr), 8, context.temp_allocator)
@@ -212,7 +229,7 @@ get_id :: proc(loc: runtime.Source_Code_Location, index: int) -> Id {
 
     assert(err == nil, "id generator buffer allocation failed")
 
-    mem.copy(raw_data(data[offset:]), &index,   size_of(int))
+    mem.copy(raw_data(data[offset:]), &pushed_id,   size_of(int))
     offset += size_of(int)
     mem.copy(raw_data(data[offset:]), &line,    size_of(int))
     offset += size_of(int)
@@ -443,9 +460,6 @@ box :: proc(w, h: f32) -> bool {
 
 // container ////////////////////////////////////////////////////////////////////
 
-// TODO: just using the stack for containers might not be sufficient (we can't have multiple roots which might be required for floating windows and popups)
-// -> perhaps we just need the stack if we have a floating version like for the layouts
-
 get_container :: proc() -> ^Container {
     return &global_container_stack[len(global_container_stack) - 1]
 }
@@ -500,8 +514,8 @@ pane :: proc(bg_color: rl.Color) -> bool {
 
 // button //////////////////////////////////////////////////////////////////////
 
-button_floating :: proc(label: string, x, y, w, h: f32, index := 0, loc := #caller_location) -> (clicked: bool) {
-    id := get_id(loc, index)
+button_floating :: proc(label: string, x, y, w, h: f32, loc := #caller_location) -> (clicked: bool) {
+    id := get_id(loc)
 
     if global_active_id == 0 || global_active_id == id {
         if rl.CheckCollisionPointRec(global_mouse_position, {x, y, w, h}) {
@@ -562,7 +576,7 @@ button_label :: proc(label: string, w: Maybe(f32) = nil, h: Maybe(f32) = nil, in
     w := w.? or_else compute_layout_item_width(text_size.x + padding.l + padding.r)
     h := h.? or_else compute_layout_item_height(text_size.y + padding.t + padding.b)
     if w > 0 && h > 0 {
-        clicked = button_floating(label, layout.xoffset, layout.yoffset, w, h, index, loc)
+        clicked = button_floating(label, layout.xoffset, layout.yoffset, w, h, loc)
     }
     layout_update(w, h)
     return clicked
@@ -582,9 +596,9 @@ button :: proc{
 
 // text input //////////////////////////////////////////////////////////////////
 
-text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, index := 0, loc := #caller_location) -> (submitted: bool) {
+text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, loc := #caller_location) -> (submitted: bool) {
     @(static) scroll_xoffset : f32 = 0 // used to scroll the text when it goes out of the box
-    id := get_id(loc, index)
+    id := get_id(loc)
     focused: bool
 
     // determine state
@@ -632,8 +646,8 @@ text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, index :=
         } else {
             // TODO: we need to handle the mouse as well
             switch {
-            case rl.IsKeyPressed(.LEFT)     : command = .Select_Left       if shift else .Left
-            case rl.IsKeyPressed(.RIGHT)    : command = .Select_Right      if shift else .Right
+            case rl.IsKeyPressed(.LEFT)     : command = .Select_Left  if shift else .Left
+            case rl.IsKeyPressed(.RIGHT)    : command = .Select_Right if shift else .Right
             case rl.IsKeyPressed(.HOME)     : command = .Select_Start if shift else .Start
             case rl.IsKeyPressed(.END)      : command = .Select_End   if shift else .End
             case rl.IsKeyPressed(.BACKSPACE): command = .Backspace
