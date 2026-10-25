@@ -16,7 +16,6 @@ import rl "vendor:raylib"
 
 // constants ///////////////////////////////////////////////////////////////////
 
-SCRATCH_MEMORY_SIZE  :: #config(UI_SCRATCH_MEMORY_SIZE,  1024)
 LAYOUT_STACK_SIZE    :: #config(UI_LAYOUT_STACK_SIZE,    16)
 CONTAINER_STACK_SIZE :: #config(UI_CONTAINER_STACK_SIZE, 16)
 
@@ -68,9 +67,6 @@ Measure_Text_Proc :: #type proc(text: string, font: rl.Font)
 global_hot_id     : Id
 global_active_id  : Id
 global_focus_flag : bool
-
-global_scratch           : mem.Scratch
-global_scratch_allocator : mem.Allocator
 
 global_draw_queue        : [dynamic]Draw_Command
 global_measure_text_proc : Measure_Text_Proc
@@ -145,8 +141,6 @@ style_ui := UI_Style{}
 init :: proc() {
     global_hot_id = 0
     global_active_id = 0
-    mem.scratch_init(&global_scratch, SCRATCH_MEMORY_SIZE)
-    global_scratch_allocator = mem.scratch_allocator(&global_scratch)
     mem.scratch_init(&global_edit_undo_state_scratch, EDIT_UNDO_STATE_SCRATCH_CAPACITY)
     mem.scratch_init(&global_edit_undo_text_scratch, EDIT_UNDO_TEXT_SCRATCH_CAPACITY)
     edit.init(&global_edit_state,
@@ -206,6 +200,7 @@ fini_frame :: proc() {
     }
     clear(&global_draw_queue)
     rl.EndDrawing()
+    free_all(context.temp_allocator)
 }
 
 // id & draw ///////////////////////////////////////////////////////////////////
@@ -217,7 +212,7 @@ get_id :: proc(loc: runtime.Source_Code_Location, index: int) -> Id {
     index     := index
     line      := loc.line
     path_addr := raw_data(loc.file_path)
-    data, err := mem.alloc_bytes_non_zeroed(2*size_of(int) + size_of(rawptr), 8, global_scratch_allocator)
+    data, err := mem.alloc_bytes_non_zeroed(2*size_of(int) + size_of(rawptr), 8, context.temp_allocator)
     offset    := 0
 
     assert(err == nil, "id generator buffer allocation failed")
