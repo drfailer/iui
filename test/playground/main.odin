@@ -86,12 +86,13 @@ main :: proc() {
                     if ui.slider(0, 100, &value) {
                         fmt.println("value changed:", value)
                     }
+
+                    if ui.text_input(&input_builder, w = 200) {
+                        fmt.println("text submitted: ", strings.to_string(input_builder))
+                    }
+
                 }
             }
-        }
-
-        if ui.text_input_floating(&input_builder, 100, 250, 200, 200) {
-            fmt.println("text submitted: ", strings.to_string(input_builder))
         }
 
         ui.fini_frame()

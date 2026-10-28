@@ -762,7 +762,7 @@ slider :: proc(min, max: $T, value: ^T, w: Maybe(f32) = nil, h: Maybe(f32) = nil
 
 // text input //////////////////////////////////////////////////////////////////
 
-text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, loc := #caller_location) -> (submitted: bool) {
+text_input_floating :: proc(x, y, w, h: f32, builder: ^strings.Builder, loc := #caller_location) -> (submitted: bool) {
     @(static) scroll_xoffset : f32 = 0 // used to scroll the text when it goes out of the box
     id := get_id(loc)
     focused: bool
@@ -838,6 +838,11 @@ text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, loc := #
     // draw
     x, y, w, h := x, y, w, h
 
+    // this is a single line input so we centered the box on h
+    box_h := style_ui.font_size + style_text_input.padding.t + style_text_input.padding.b
+    y += (h - box_h)/2
+    h = box_h
+
     // border
     draw_rect(x, y, w, h, style_text_input.border_color)
     x += 1
@@ -860,7 +865,6 @@ text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, loc := #
     content   := strings.to_string(builder^)
     selection := global_edit_state.selection
 
-    // TODO: the text should be centered vertically
     begin_scissor_mode(x, y, w, h)
     if focused {
 
@@ -896,7 +900,6 @@ text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, loc := #
 
             draw_text(text_after_selection, x, y, style_text_input.text_color)
         } else {
-            // TODO: scroll the text relatively to the cursor
             // no selection but focused: draw text and caret
             draw_text(content, x, y, style_text_input.text_color)
             caret_index := clamp(selection[0], 0, len(content))
@@ -908,5 +911,15 @@ text_input_floating :: proc(builder: ^strings.Builder, x, y, w, h: f32, loc := #
         draw_text(content, x, y, style_text_input.text_color)
     }
     end_scissor_mode()
+    return
+}
+
+text_input :: proc(builder: ^strings.Builder, w: Maybe(f32) = nil, h: Maybe(f32) = nil, loc := #caller_location) -> (submitted: bool) {
+    layout := get_layout()
+    text_size := measure_text(strings.to_string(builder^))
+    w := w.? or_else compute_layout_item_width(text_size.x + style_text_input.padding.l + style_text_input.padding.r)
+    h := h.? or_else compute_layout_item_height(text_size.y + style_text_input.padding.t + style_text_input.padding.b)
+    submitted = text_input_floating(layout.xoffset, layout.yoffset, w, h, builder, loc)
+    layout_update(w, h)
     return
 }
