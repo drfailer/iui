@@ -31,7 +31,7 @@ main :: proc() {
         rl.ClearBackground(rl.GetColor(0x222222ff))
         ui.init_frame()
 
-        if ui.pane({255, 255, 0, 255}) {
+        if ui.pane({0, 0, 255, 255}) {
             if ui.row(padding = {4, 4, 4, 4}, item_spacing = 10) {
                 if ui.column(item_spacing = 4) {
                     if ui.button("button 2") {
@@ -80,17 +80,17 @@ main :: proc() {
                     if ui.button("submit") {
                         fmt.println("submit")
                     }
+
+                    @(static) value := 50
+                    if ui.slider(0, 100, &value) {
+                        fmt.println("value changed:", value)
+                    }
                 }
             }
         }
 
         if ui.text_input_floating(&input_builder, 100, 250, 200, 200) {
             fmt.println("text submitted: ", strings.to_string(input_builder))
-        }
-
-        @(static) value := 50
-        if ui.slider_floating(400, 250, 16, 60, 0, 100, &value) {
-            fmt.println("value changed:", value)
         }
 
         ui.fini_frame()

@@ -127,22 +127,38 @@ CHECKBOX_BORDER_SIZE   :: 1
 CHECKBOX_LABEL_SPACING :: 4
 
 Slider_Style :: struct {
+    thumb_height     : f32,
+    thumb_width      : f32,
+    thumb_radius     : f32,
+    bar_height       : f32,
+    border_thickness : f32,
+    thumb_color      : rl.Color,
+    bar_color        : rl.Color,
+    border_color     : rl.Color,
 }
 
 style_slider := Slider_Style{
+    thumb_height     = 16,
+    thumb_width      = 4,
+    thumb_radius     = 0,
+    bar_height       = 16,
+    border_thickness = 1,
+    thumb_color      = {185, 148, 104, 255},
+    bar_color        = {0, 0, 0, 255},
+    border_color     = {19, 19, 19, 255},
 }
 
-SLIDER_THUMB_WIDTH :: 4
+DEFAULT_SLIDER_WIDTH :: 60
 
 Text_Input_Style :: struct {
-    idle_background_color : rl.Color,
+    idle_background_color    : rl.Color,
     focused_background_color : rl.Color,
-    caret_color : rl.Color,
-    border_color : rl.Color,
-    selection_color : rl.Color,
-    text_color : rl.Color,
-    selected_text_color : rl.Color,
-    padding : Padding,
+    caret_color              : rl.Color,
+    border_color             : rl.Color,
+    selection_color          : rl.Color,
+    text_color               : rl.Color,
+    selected_text_color      : rl.Color,
+    padding                  : Padding,
 }
 
 style_text_input := Text_Input_Style{
@@ -571,7 +587,6 @@ is_component_clicked :: proc(id: Id, x, y, w, h: f32) -> (clicked: bool) {
 
 // TODO
 
-
 // image ///////////////////////////////////////////////////////////////////////
 
 // TODO
@@ -673,9 +688,6 @@ checkbox :: proc(label: string, checked: ^bool, loc := #caller_location) -> (cli
 
 // slider //////////////////////////////////////////////////////////////////////
 
-// TODO:
-// - we need multiple styles for this (round thumb, line/rectangle, display value?, ...)
-
 slider_floating :: proc(x, y, h, w: f32, min, max: $T, value: ^T, loc := #caller_location) -> (updated: bool) {
     id := get_id(loc)
     value_range := cast(f32)(max - min)
@@ -695,10 +707,37 @@ slider_floating :: proc(x, y, h, w: f32, min, max: $T, value: ^T, loc := #caller
         updated = new_value != value^
         value^ = new_value
     }
-    thumb_x := w * (cast(f32)value^ / value_range)
 
-    draw_rect(x, y + h/2, w, 1, {255, 255, 255, 255})
-    draw_rect(x + thumb_x - SLIDER_THUMB_WIDTH/2, y, SLIDER_THUMB_WIDTH, h, {255, 255, 255, 255})
+    // bar + border
+    bw := w
+    bh := style_slider.bar_height
+    bt := style_slider.border_thickness
+    bx := x
+    by := y + (h - bh)/2
+
+    draw_rect(x, by, w, bh, style_slider.bar_color)
+    if style_slider.border_thickness > 0 {
+        draw_rect(bx,           by,           bw, bt, style_slider.border_color)
+        draw_rect(bx,           by,           bt, bh, style_slider.border_color)
+        draw_rect(bx,           by + bh - bt, bw, bt, style_slider.border_color)
+        draw_rect(bx + bw - bt, by,           bt, bh, style_slider.border_color)
+    }
+
+    // thumb
+    tw := style_slider.thumb_width
+    th := style_slider.thumb_height
+    tx := w * (cast(f32)value^ / value_range)
+    ty := y + (h - th)/2
+    draw_rect(x + tx - tw/2, ty, tw, th, style_slider.thumb_color)
+    return
+}
+
+slider :: proc(min, max: $T, value: ^T, w: Maybe(f32) = nil, h: Maybe(f32) = nil, loc := #caller_location) -> (updated: bool) {
+    layout := get_layout()
+    w := w.? or_else compute_layout_item_width(DEFAULT_SLIDER_WIDTH)
+    h := h.? or_else compute_layout_item_height(style_slider.thumb_height)
+    updated = slider_floating(layout.xoffset, layout.yoffset, h, w, min, max, value, loc)
+    layout_update(w, h)
     return
 }
 
