@@ -31,6 +31,7 @@ main :: proc() {
         rl.ClearBackground(rl.GetColor(0x222222ff))
         ui.init_frame()
 
+        ui.text("test")
         if ui.pane({0, 0, 255, 255}) {
             if ui.row(padding = {4, 4, 4, 4}, item_spacing = 10) {
                 if ui.column(item_spacing = 4) {

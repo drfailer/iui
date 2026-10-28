@@ -85,11 +85,14 @@ global_edit_state              : edit.State
 // styles //////////////////////////////////////////////////////////////////////
 
 UI_Style :: struct {
-    font      : rl.Font,
-    font_size : f32,
+    font       : rl.Font,
+    font_size  : f32,
+    text_color : rl.Color,
 }
 
-style_ui := UI_Style{}
+style_ui := UI_Style{
+    text_color = {185, 148, 104, 255},
+}
 
 Button_Style :: struct {
     padding          : Padding,
@@ -510,10 +513,13 @@ get_container :: proc() -> ^Container {
 //
 
 container_push :: proc(container: Container) {
+    layout_push(Layout{})
+    layout := get_layout()
     container := container
     container.command_index = cast(i32)len(global_draw_queue)
-    begin_scissor_mode(container.x, container.y, container.w, container.h)
-    layout_push(Layout{})
+    x := container.x if container.x > 0 else layout.xoffset
+    y := container.y if container.y > 0 else layout.yoffset
+    begin_scissor_mode(x, y, container.w, container.h)
     append(&global_container_stack, container)
 }
 
@@ -585,7 +591,18 @@ is_component_clicked :: proc(id: Id, x, y, w, h: f32) -> (clicked: bool) {
 
 // text ////////////////////////////////////////////////////////////////////////
 
-// TODO
+text_floating :: proc(x, y, w, h: f32, content: string, color := style_ui.text_color, loc := #caller_location) {
+    begin_scissor_mode(x, y, w, h)
+    draw_text(content, x, y, color)
+    end_scissor_mode()
+}
+
+text :: proc(content: string, color := style_ui.text_color, loc := #caller_location) {
+    layout := get_layout()
+    text_size := measure_text(content)
+    text_floating(layout.xoffset, layout.yoffset, text_size.x, text_size.y, content, color, loc)
+    layout_update(text_size.x, text_size.y)
+}
 
 // image ///////////////////////////////////////////////////////////////////////
 
