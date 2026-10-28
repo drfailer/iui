@@ -540,7 +540,10 @@ container_pop :: proc() {
 
 // pane ////////////////////////////////////////////////////////////////////////
 
-// TODO: floating pane
+//
+// The pane is purely a style component that allow to change the background
+// color behind other components (it doesn't support any interaction).
+//
 
 end_pane :: proc() {
     container := get_container()
@@ -550,6 +553,8 @@ end_pane :: proc() {
     cmd.h = layout.h + layout.padding.b
     container_pop()
 }
+
+// TODO: add more options to the pane (padding, borders, ...)
 
 @(deferred_none=end_pane)
 pane :: proc(bg_color: rl.Color) -> bool {
@@ -602,6 +607,11 @@ text :: proc(content: string, color := style_ui.text_color, loc := #caller_locat
     text_size := measure_text(content)
     text_floating(layout.xoffset, layout.yoffset, text_size.x, text_size.y, content, color, loc)
     layout_update(text_size.x, text_size.y)
+}
+
+textf :: proc(f: string, data: ..any, color := style_ui.text_color, loc := #caller_location) {
+    content := fmt.aprintf(f, ..data, allocator = context.temp_allocator)
+    text(content, color, loc)
 }
 
 // image ///////////////////////////////////////////////////////////////////////
