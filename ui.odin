@@ -84,6 +84,8 @@ global_edit_state              : edit.State
 
 // styles //////////////////////////////////////////////////////////////////////
 
+// UI //////////////////////////////////
+
 UI_Style :: struct {
     font       : rl.Font,
     font_size  : f32,
@@ -93,6 +95,8 @@ UI_Style :: struct {
 style_ui := UI_Style{
     text_color = {185, 148, 104, 255},
 }
+
+// Button //////////////////////////////
 
 Button_Style :: struct {
     padding          : Padding,
@@ -116,6 +120,8 @@ style_button := Button_Style{
     corner_radius    = 0,
 }
 
+// Checkbox ////////////////////////////
+
 Checkbox_Style :: struct {
     box_color   : rl.Color,
     label_color : rl.Color,
@@ -128,6 +134,8 @@ style_checkbox := Checkbox_Style{
 
 CHECKBOX_BORDER_SIZE   :: 1
 CHECKBOX_LABEL_SPACING :: 4
+
+// Slider //////////////////////////////
 
 Slider_Style :: struct {
     thumb_height     : f32,
@@ -152,6 +160,61 @@ style_slider := Slider_Style{
 }
 
 DEFAULT_SLIDER_WIDTH :: 60
+
+// Header //////////////////////////////
+
+Header_Level_Style :: struct {
+    padding          : Padding,
+    text_color       : rl.Color,
+    color            : rl.Color,
+    hover_color      : rl.Color,
+    pressed_color    : rl.Color,
+    border_color     : rl.Color,
+    border_thickness : f32,
+    openned_symbol   : string,
+    closed_symbol    : string,
+}
+
+Header_Style :: [3]Header_Level_Style
+
+style_header := Header_Style{
+    {
+        padding          = {4, 4, 4, 4},
+        text_color       = {185, 148, 104, 255},
+        color            = {64, 64, 64, 255},
+        hover_color      = {46, 46, 46, 255},
+        pressed_color    = {0, 0, 0, 255},
+        border_color     = {19, 19, 19, 255},
+        border_thickness = 1,
+        openned_symbol   = "v",
+        closed_symbol    = ">",
+    },
+    {
+        padding          = {4, 4, 4, 4},
+        text_color       = {185, 148, 104, 255},
+        color            = {64, 64, 64, 255},
+        hover_color      = {46, 46, 46, 255},
+        pressed_color    = {0, 0, 0, 255},
+        border_color     = {19, 19, 19, 255},
+        border_thickness = 1,
+        openned_symbol   = "-",
+        closed_symbol    = "+",
+    },
+    {
+        padding          = {4, 4, 4, 4},
+        text_color       = {185, 148, 104, 255},
+        color            = {64, 64, 64, 255},
+        hover_color      = {46, 46, 46, 255},
+        pressed_color    = {0, 0, 0, 255},
+        border_color     = {19, 19, 19, 255},
+        border_thickness = 1,
+        openned_symbol   = "-",
+        closed_symbol    = "+",
+    },
+}
+HEADER_SYMBOL_SPACING :: 10
+
+// Text Input //////////////////////////
 
 Text_Input_Style :: struct {
     idle_background_color    : rl.Color,
@@ -545,7 +608,7 @@ container_pop :: proc() {
 // color behind other components (it doesn't support any interaction).
 //
 
-end_pane :: proc() {
+pane_end :: proc() {
     container := get_container()
     layout    := get_layout()
     cmd       := &global_draw_queue[container.command_index + 1].(Rect)
@@ -556,7 +619,7 @@ end_pane :: proc() {
 
 // TODO: add more options to the pane (padding, borders, ...)
 
-@(deferred_none=end_pane)
+@(deferred_none=pane_end)
 pane :: proc(bg_color: rl.Color) -> bool {
     container_push({})
     layout := get_layout()
@@ -650,7 +713,6 @@ button_floating :: proc(x, y, w, h: f32, label: string, loc := #caller_location)
 
     // text
     text_size := measure_text(label)
-    padding := style_button.padding
     text_x := x + (w - text_size.x) / 2
     text_y := y + (h - text_size.y) / 2
     draw_text(label, text_x, text_y, style_button.text_color)
@@ -769,6 +831,64 @@ slider :: proc(min, max: $T, value: ^T, w: Maybe(f32) = nil, h: Maybe(f32) = nil
 }
 
 // header //////////////////////////////////////////////////////////////////////
+
+header_end :: proc() {
+    container_pop()
+}
+
+@(deferred_none=header_end)
+header :: proc(label: string, opened: ^bool, level := 0, w: Maybe(f32) = nil, loc := #caller_location) -> bool {
+    id := get_id(loc)
+
+    layout      := get_layout()
+    style       := style_header[level]
+    symbol      := style.openned_symbol if opened^ else style.closed_symbol
+    label_size  := measure_text(label)
+    symbol_size := measure_text(symbol)
+    width       := w.? or_else compute_layout_item_width(label_size.x + HEADER_SYMBOL_SPACING + symbol_size.x + style.padding.l + style.padding.r + 2*style.border_thickness)
+    height      := compute_layout_item_height(max(label_size.y, symbol_size.y) + style.padding.t + style.padding.b + 2*style.border_thickness)
+    x, y, w, h  := layout.xoffset, layout.yoffset, width, height
+
+    container_push({x = x, y = y, w = w, h = h})
+
+    // update globals
+    if is_component_clicked(id, x, y, w, h) {
+        opened^ = !opened^
+    }
+
+    {
+        // border
+        draw_rect(x, y, w, h, style.border_color)
+        x += style.border_thickness
+        y += style.border_thickness
+        w -= 2 * style.border_thickness
+        h -= 2 * style.border_thickness
+
+        // background
+        if global_active_id == id {
+            draw_rect(x, y, w, h, style.pressed_color)
+        } else if global_hot_id == id {
+            draw_rect(x, y, w, h, style.hover_color)
+        } else {
+            draw_rect(x, y, w, h, style.color)
+        }
+        x += style.padding.l
+        y += style.padding.t
+        w -= style.padding.l + style.padding.r
+        h -= style.padding.t + style.padding.b
+
+        // text
+        label_x := x
+        label_y := y + (h - label_size.y) / 2
+        draw_text(label, label_x, label_y, style.text_color)
+        symbol_x := width - style.border_thickness - style.padding.r - symbol_size.x
+        symbol_y := y + (h - symbol_size.y) / 2
+        draw_text(symbol, symbol_x, symbol_y, style.text_color)
+    }
+
+    layout_update(width, height)
+    return opened^
+}
 
 // text input //////////////////////////////////////////////////////////////////
 

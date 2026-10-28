@@ -23,7 +23,7 @@ main :: proc() {
     defer ui.fini()
 
     // ui.style_ui.font      = rl.LoadFontEx("/usr/share/fonts/TTF/IBMPlexMono-Regular.ttf", FONT_SIZE, nil, 0)
-    ui.style_ui.font      = rl.LoadFontEx("/usr/share/fonts/liberation-sans-fonts/LiberationSans-Regular.ttf", FONT_SIZE, nil, 0)
+    ui.style_ui.font      = rl.LoadFontEx("/usr/share/fonts/google-noto-vf/NotoSansMono[wght].ttf", FONT_SIZE, nil, 0)
     ui.style_ui.font_size = FONT_SIZE
     defer rl.UnloadFont(ui.style_ui.font)
 
@@ -31,9 +31,15 @@ main :: proc() {
         rl.ClearBackground(rl.GetColor(0x222222ff))
         ui.init_frame()
 
-        ui.text("test")
+        ui.text("some text")
         if ui.pane({0, 0, 255, 255}) {
             if ui.row(padding = {4, 4, 4, 4}, item_spacing = 10) {
+
+                @(static) buttons_header_status: bool
+                if ui.header("header", &buttons_header_status, w = 100) {
+                    ui.text("test")
+                }
+
                 if ui.column(item_spacing = 4) {
                     if ui.button("button 2") {
                         button2_click_count += 1
@@ -57,6 +63,7 @@ main :: proc() {
                         fmt.println("button 2 cliked ", button2_click_count)
                     }
                 }
+
                 if ui.box(200, 200) {
                     layout := ui.get_layout()
                     ui.draw_rect(layout.xoffset, layout.yoffset, 200, 200, {255, 0, 0, 255})
