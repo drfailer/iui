@@ -36,7 +36,7 @@ Padding :: struct { l, r, t, b: f32 }
 // TODO: offset and w/h should be merged
 
 Container :: struct {
-    x, y, h, w : f32,
+    x, y, w, h : f32,
     zindex : i32, // TODO
     command_index : i32, // used if we need to modify draw commands (when using a background color)
 }
@@ -384,39 +384,30 @@ get_parent_layout :: proc() -> ^Layout {
 // window).
 //
 
-layout_push_floating :: proc(layout: Layout) {
-    append(&global_layout_stack, layout)
+layout_push_floating :: proc(
+    mode: Layout_Mode,
+    x, y: f32,
+    padding      := Padding{},
+    item_spacing := f32(0),
+    item_sizes   := []f32{},
+    size         := f32(0),
+) {
+    append(&global_layout_stack, {
+        mode         = mode,
+        xoffset      = x + padding.l,
+        yoffset      = y + padding.t,
+        x            = x,
+        y            = y,
+        padding      = padding,
+        item_spacing = item_spacing,
+        item_sizes   = item_sizes,
+        size         = size,
+    })
 }
 
-layout_pop_floating :: proc() {
-    pop(&global_layout_stack)
-}
-
-//
-// These functions push and pop layouts in the current window (update the
-// offsets of the new layout before push and after pop).
-//
-
-layout_push :: proc(layout: Layout) {
-    current := get_layout()
-    // update the offsets
-    layout := layout
-    if layout.xoffset == 0 {
-        layout.xoffset = current.xoffset
-    }
-    if layout.yoffset == 0 {
-        layout.yoffset = current.yoffset
-    }
-    layout.x = layout.xoffset
-    layout.y = layout.yoffset
-    layout.xoffset += layout.padding.l
-    layout.yoffset += layout.padding.t
-    layout_push_floating(layout)
-}
-
-layout_pop :: proc() {
+layout_pop_floating :: proc() -> (w, h: f32) {
     layout := get_layout()
-    w, h := layout.w, layout.h
+    w, h = layout.w, layout.h
     if layout.mode == .Column {
         h -= layout.item_spacing
     } else {
@@ -424,7 +415,28 @@ layout_pop :: proc() {
     }
     w += layout.padding.l + layout.padding.r
     h += layout.padding.t + layout.padding.b
-    layout_pop_floating()
+    pop(&global_layout_stack)
+    return
+}
+
+//
+// These functions push and pop layouts in the current window (update the
+// offsets of the new layout before push and after pop).
+//
+
+layout_push :: proc(
+    mode: Layout_Mode,
+    padding      := Padding{},
+    item_spacing := f32(0),
+    item_sizes   := []f32{},
+    size         := f32(0),
+) {
+    current := get_layout()
+    layout_push_floating(mode, current.xoffset, current.yoffset, padding, item_spacing, item_sizes, size)
+}
+
+layout_pop :: proc() {
+    w, h := layout_pop_floating()
     layout_update(w, h)
 }
 
@@ -511,14 +523,7 @@ column :: proc(w: f32 = 0, item_heights := []f32{}, padding: Padding = {}, item_
             size = get_layout_item_size().? or_else 0
         }
     }
-
-    layout_push(Layout{
-        mode = .Column,
-        item_sizes = item_heights,
-        size = size,
-        padding = padding,
-        item_spacing = item_spacing,
-    })
+    layout_push(.Column, item_sizes = item_heights, size = size, padding = padding, item_spacing = item_spacing)
     return true
 }
 
@@ -536,13 +541,7 @@ row :: proc(h: f32 = 0, item_widths := []f32{}, padding: Padding = {}, item_spac
         }
     }
 
-    layout_push(Layout{
-        mode = .Row,
-        item_sizes = item_widths,
-        size = size,
-        padding = padding,
-        item_spacing = item_spacing,
-    })
+    layout_push(.Row, item_sizes = item_widths, size = size, padding = padding, item_spacing = item_spacing)
     return true
 }
 
@@ -569,58 +568,43 @@ get_container :: proc() -> ^Container {
     return &global_container_stack[len(global_container_stack) - 1]
 }
 
-container_push_floating :: proc(container: Container) {
-    container := container
-    layout_push_floating({
-        xoffset = container.x,
-        yoffset = container.y,
-        x = container.x,
-        y = container.y,
+container_push_floating :: proc(x, y, w, h: f32, zindex := i32(0), padding := Padding{}) {
+    layout_push_floating(.Column, x, y, padding = padding)
+    append(&global_container_stack, {
+        x             = x,
+        y             = y,
+        w             = w,
+        h             = h,
+        zindex        = zindex,
+        command_index = cast(i32)len(global_draw_queue)
     })
-    container.command_index = cast(i32)len(global_draw_queue)
-    append(&global_container_stack, container)
-    begin_scissor_mode(container.x, container.y, container.w, container.h)
+    begin_scissor_mode(x, y, w, h)
 }
 
-container_pop_floating :: proc() {
-    layout    := get_layout()
+container_pop_floating :: proc() -> (w, h: f32) {
+    w, h = layout_pop_floating()
+
     container := get_container()
     cmd       := &global_draw_queue[container.command_index].(Scissor)
 
     // we update the scissor area with the proper size of the container is
     // resizable (no change on fixed sizes)
-    if container.w <= 0 do cmd.w = layout.w
-    if container.h <= 0 do cmd.h = layout.h
+    if container.w <= 0 do cmd.w = w
+    if container.h <= 0 do cmd.h = h
 
     pop(&global_container_stack)
-    layout_pop_floating()
     end_scissor_mode()
+    return
 }
 
-container_push :: proc(container: Container) {
-    layout_push(Layout{})
+container_push :: proc(padding := Padding{}) {
     layout := get_layout()
-    container := container
-    container.x = layout.xoffset
-    container.y = layout.yoffset
-    container.command_index = cast(i32)len(global_draw_queue)
-    append(&global_container_stack, container)
-    begin_scissor_mode(container.x, container.y, container.w, container.h)
+    container_push_floating(layout.xoffset, layout.yoffset, 0, 0, 0, padding)
 }
 
 container_pop :: proc() {
-    layout    := get_layout()
-    container := get_container()
-    cmd       := &global_draw_queue[container.command_index].(Scissor)
-
-    // we update the scissor area with the proper size of the container is
-    // resizable (no change on fixed sizes)
-    if container.w <= 0 do cmd.w = layout.w
-    if container.h <= 0 do cmd.h = layout.h
-
-    pop(&global_container_stack)
-    layout_pop()
-    end_scissor_mode()
+    w, h := container_pop_floating()
+    layout_update(w, h)
 }
 
 // pane ////////////////////////////////////////////////////////////////////////
@@ -764,7 +748,7 @@ button :: proc{
 
 // checkbox ////////////////////////////////////////////////////////////////////
 
-checkbox_floating :: proc(x, y, h, w: f32, label: string, checked: ^bool, loc := #caller_location) -> (clicked: bool) {
+checkbox_floating :: proc(x, y, w, h: f32, label: string, checked: ^bool, loc := #caller_location) -> (clicked: bool) {
     id       := get_id(loc)
     box_size := style_ui.font_size
 
@@ -799,7 +783,7 @@ checkbox :: proc(label: string, checked: ^bool, loc := #caller_location) -> (cli
 
 // slider //////////////////////////////////////////////////////////////////////
 
-slider_floating :: proc(x, y, h, w: f32, min, max: $T, value: ^T, loc := #caller_location) -> (updated: bool) {
+slider_floating :: proc(x, y, w, h: f32, min, max: $T, value: ^T, loc := #caller_location) -> (updated: bool) {
     id := get_id(loc)
     value_range := cast(f32)(max - min)
 
@@ -847,7 +831,7 @@ slider :: proc(min, max: $T, value: ^T, w: Maybe(f32) = nil, h: Maybe(f32) = nil
     layout := get_layout()
     w := w.? or_else compute_layout_item_width(DEFAULT_SLIDER_WIDTH)
     h := h.? or_else compute_layout_item_height(style_slider.thumb_height)
-    updated = slider_floating(layout.xoffset, layout.yoffset, h, w, min, max, value, loc)
+    updated = slider_floating(layout.xoffset, layout.yoffset, w, h, min, max, value, loc)
     layout_update(w, h)
     return
 }
@@ -871,7 +855,7 @@ header :: proc(label: string, opened: ^bool, level := 0, w: Maybe(f32) = nil, lo
     height      := compute_layout_item_height(max(label_size.y, symbol_size.y) + style.padding.t + style.padding.b + 2*style.border_thickness)
     x, y, w, h  := layout.xoffset, layout.yoffset, width, height
 
-    container_push({x = x, y = y, w = w, h = h})
+    container_push()
 
     // update globals
     if is_component_clicked(id, x, y, w, h) {
