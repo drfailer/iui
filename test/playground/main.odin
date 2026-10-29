@@ -32,7 +32,7 @@ main :: proc() {
         ui.init_frame()
 
         ui.text("some text")
-        if ui.pane({0, 0, 255, 255}) {
+        if ui.pane({0, 0, 255, 255}, padding = {10, 10, 10, 10}) {
             if ui.row(padding = {4, 4, 4, 4}, item_spacing = 10) {
 
                 @(static) buttons_header_status: bool

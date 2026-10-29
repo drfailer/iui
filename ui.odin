@@ -17,6 +17,7 @@ import rl "vendor:raylib"
 // TODO: z indexing support
 // TODO: pane border
 // TODO: scrollbox
+// TODO: header title external padding (outside of the rectangle)
 
 // constants ///////////////////////////////////////////////////////////////////
 
@@ -32,6 +33,7 @@ EDIT_UNDO_TEXT_SCRATCH_CAPACITY  :: #config(UI_EDIT_UNDO_TEXT_SCRATCH_CAPACITY, 
 Id :: #type u32
 
 Padding :: struct { l, r, t, b: f32 }
+Border_Data :: struct($T: typeid) { l, r, t, b: T }
 
 // TODO: offset and w/h should be merged
 
@@ -617,19 +619,67 @@ container_pop :: proc() {
 pane_end :: proc() {
     container := get_container()
     layout    := get_layout()
-    cmd       := &global_draw_queue[container.command_index + 1].(Rect)
-    cmd.w = layout.w + layout.padding.r
-    cmd.h = layout.h + layout.padding.b
+    w, h      := layout.w + layout.padding.l + layout.padding.r, layout.h + layout.padding.t + layout.padding.b
+
+    // background
+    cmd_bg := &global_draw_queue[container.command_index + 1].(Rect)
+    cmd_bg.w = w
+    cmd_bg.h = h
+
+    // left border
+    cmd_b_l := &global_draw_queue[container.command_index + 2].(Rect)
+    cmd_b_l.h = h
+
+    // right border
+    cmd_b_r := &global_draw_queue[container.command_index + 3].(Rect)
+    cmd_b_r.h = h
+    layout.xoffset += cmd_b_r.w
+    layout.w += cmd_b_r.w
+
+    // top border
+    cmd_b_t := &global_draw_queue[container.command_index + 4].(Rect)
+    cmd_b_t.w = w
+
+    // bottom border
+    cmd_b_b := &global_draw_queue[container.command_index + 5].(Rect)
+    cmd_b_b.w = w
+    layout.yoffset += cmd_b_r.h
+    layout.h += cmd_b_r.h
+
     container_pop()
 }
 
-// TODO: add more options to the pane (padding, borders, ...)
+// TODO: this could be resizable?
 
 @(deferred_none=pane_end)
-pane :: proc(bg_color: rl.Color) -> bool {
-    container_push({})
+pane :: proc(
+    bg_color        : rl.Color = {},
+    border_color    : Border_Data(rl.Color) = {},
+    border_thickness: Border_Data(f32) = {},
+    padding         : Padding = {},
+) -> bool {
+    container_push(padding)
     layout := get_layout()
-    draw_rect(layout.xoffset, layout.yoffset, 0, 0, bg_color)
+
+    //background
+    draw_rect(layout.x, layout.y, 0, 0, bg_color)
+
+    // left border
+    draw_rect(layout.x, layout.y, border_thickness.l, 0, border_color.l)
+
+    // right border
+    draw_rect(layout.x, layout.y, border_thickness.r, 0, border_color.r)
+
+    // top border
+    draw_rect(layout.x, layout.y, 0, border_thickness.t, border_color.t)
+
+    // right border
+    draw_rect(layout.x, layout.y, 0, border_thickness.b, border_color.b)
+
+    layout.w += border_thickness.l
+    layout.h += border_thickness.t
+    layout.xoffset += border_thickness.l
+    layout.yoffset += border_thickness.t
     return true
 }
 
