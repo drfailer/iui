@@ -402,10 +402,10 @@ layout_push :: proc(layout: Layout) {
     // update the offsets
     layout := layout
     if layout.xoffset == 0 {
-        layout.xoffset += current.xoffset
+        layout.xoffset = current.xoffset
     }
     if layout.yoffset == 0 {
-        layout.yoffset += current.yoffset
+        layout.yoffset = current.yoffset
     }
     layout.x = layout.xoffset
     layout.y = layout.yoffset
@@ -569,21 +569,43 @@ get_container :: proc() -> ^Container {
     return &global_container_stack[len(global_container_stack) - 1]
 }
 
-// TODO: floating containers
+container_push_floating :: proc(container: Container) {
+    container := container
+    layout_push_floating({
+        xoffset = container.x,
+        yoffset = container.y,
+        x = container.x,
+        y = container.y,
+    })
+    container.command_index = cast(i32)len(global_draw_queue)
+    append(&global_container_stack, container)
+    begin_scissor_mode(container.x, container.y, container.w, container.h)
+}
 
-//
-// Managed containers.
-//
+container_pop_floating :: proc() {
+    layout    := get_layout()
+    container := get_container()
+    cmd       := &global_draw_queue[container.command_index].(Scissor)
+
+    // we update the scissor area with the proper size of the container is
+    // resizable (no change on fixed sizes)
+    if container.w <= 0 do cmd.w = layout.w
+    if container.h <= 0 do cmd.h = layout.h
+
+    pop(&global_container_stack)
+    layout_pop_floating()
+    end_scissor_mode()
+}
 
 container_push :: proc(container: Container) {
     layout_push(Layout{})
     layout := get_layout()
     container := container
+    container.x = layout.xoffset
+    container.y = layout.yoffset
     container.command_index = cast(i32)len(global_draw_queue)
-    x := container.x if container.x > 0 else layout.xoffset
-    y := container.y if container.y > 0 else layout.yoffset
-    begin_scissor_mode(x, y, container.w, container.h)
     append(&global_container_stack, container)
+    begin_scissor_mode(container.x, container.y, container.w, container.h)
 }
 
 container_pop :: proc() {
