@@ -29,11 +29,11 @@ main :: proc() {
 
     for !rl.WindowShouldClose() {
         rl.ClearBackground(rl.GetColor(0x222222ff))
-        ui.init_frame()
+        ui.init_frame(cast(f32)rl.GetScreenWidth(), cast(f32)rl.GetScreenHeight())
 
         ui.text("some text")
         if ui.pane({0, 0, 255, 255}, padding = {10, 10, 10, 10}) {
-            if ui.row(padding = {4, 4, 4, 4}, item_spacing = 10) {
+            if ui.row(padding = {4, 4, 4, 4}, item_widths = {150, 0}, item_spacing = 10) {
 
                 @(static) buttons_header_status: bool
                 if ui.header("header", &buttons_header_status) {

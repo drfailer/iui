@@ -33,15 +33,20 @@ EDIT_UNDO_TEXT_SCRATCH_CAPACITY  :: #config(UI_EDIT_UNDO_TEXT_SCRATCH_CAPACITY, 
 
 Id :: #type u32
 
+Rect :: struct { x, y, w, h: f32 }
+
 Padding :: struct { l, r, t, b: f32 }
 Border_Data :: struct($T: typeid) { l, r, t, b: T }
 
-// TODO: offset and w/h should be merged
+Container_Opt :: enum { Resizable, Moveable }
+Container_Opts :: bit_set[Container_Opt]
 
 Container :: struct {
-    x, y, w, h : f32,
-    zindex : u8,
+    x, y, w, h    : f32,
+    zindex        : u8,
     command_index : i32, // used if we need to modify draw commands (when using a background color)
+    scrolloffset  : [2]f32,
+    opts          : Container_Opts,
 }
 
 Layout_Mode :: enum { Column, Row }
@@ -61,10 +66,10 @@ Measure_Text_Proc :: #type proc(text: string, font: rl.Font)
 
 // draw queue //////////////////////////////////////////////////////////////////
 
-Rect :: struct { x, y, w, h, corner_radius: f32, color: rl.Color }
-Text :: struct { text: string, x, y: f32, font: rl.Font, font_size: f32, color: rl.Color }
-Scissor :: struct { x, y, w, h: f32, begin: bool }
-Draw_Command :: union { Rect, Text, Scissor }
+Command_Rect :: struct { x, y, w, h, corner_radius: f32, color: rl.Color }
+Command_Text :: struct { text: string, x, y: f32, font: rl.Font, font_size: f32, color: rl.Color }
+Command_Clip :: struct { x, y, w, h: f32, begin: bool }
+Draw_Command :: union { Command_Rect, Command_Text, Command_Clip }
 
 Draw_Queue :: struct {
     zqueues   : [256][dynamic]Draw_Command,
@@ -243,7 +248,7 @@ style_header := Header_Style{
 }
 HEADER_SYMBOL_SPACING :: 20
 
-// Text Input //////////////////////////
+// Command_Text Input //////////////////////////
 
 Text_Input_Style :: struct {
     idle_background_color    : rl.Color,
@@ -293,16 +298,13 @@ fini :: proc() {
     delete(global_container_map)
 }
 
-init_frame :: proc() {
+init_frame :: proc(screen_w, screen_h: f32) {
     global_hot_id = 0
 
-    // reset layout stack
-    clear(&global_layout_stack)
-    append(&global_layout_stack, Layout{})
-
     // reset container stack
+    clear(&global_layout_stack)
     clear(&global_container_stack)
-    append(&global_container_stack, get_container(0))
+    container_push_floating(0, 0, screen_w, screen_h, 0, {})
 
     // get events (things can change within a frame so we collect at the start)
     global_mouse_position = rl.GetMousePosition()
@@ -319,16 +321,16 @@ fini_frame :: proc() {
     for &zqueue in global_draw_queue.zqueues[:global_draw_queue.max_index + 1] {
         for cmd_variant in zqueue {
             switch cmd in cmd_variant {
-            case Rect:
+            case Command_Rect:
                 // TODO: add the border to the options
                 if cmd.corner_radius == 0 {
                     rl.DrawRectangleRec({cmd.x, cmd.y, cmd.w, cmd.h}, cmd.color)
                 } else {
                     rl.DrawRectangleRounded({cmd.x, cmd.y, cmd.w, cmd.h}, cmd.corner_radius, 4, cmd.color)
                 }
-            case Text:
+            case Command_Text:
                 rl_draw_text_ex(cmd.font, cmd.text, {cmd.x, cmd.y}, cmd.font_size, 0, cmd.color)
-            case Scissor:
+            case Command_Clip:
                 if cmd.begin {
                     rl.BeginScissorMode(cast(c.int)cmd.x, cast(c.int)cmd.y, cast(c.int)cmd.w, cast(c.int)cmd.h)
                 } else {
@@ -378,13 +380,13 @@ get_id :: proc(loc: runtime.Source_Code_Location) -> Id {
 }
 
 draw_rect :: proc(x, y, w, h: f32, color: rl.Color, corner_radius: f32 = 0, zindex: u8 = get_container().zindex) {
-    draw_queue_push(&global_draw_queue, zindex, Rect{x, y, w, h, corner_radius, color})
+    draw_queue_push(&global_draw_queue, zindex, Command_Rect{x, y, w, h, corner_radius, color})
 }
 
 draw_text :: proc(text: string, x, y: f32, color: rl.Color, font: Maybe(rl.Font) = nil, font_size: Maybe(f32) = nil, zindex: u8 = get_container().zindex) {
     font      := font.?      or_else style_ui.font
     font_size := font_size.? or_else style_ui.font_size
-    draw_queue_push(&global_draw_queue, zindex, Text{text, x, y, font, font_size, color})
+    draw_queue_push(&global_draw_queue, zindex, Command_Text{text, x, y, font, font_size, color})
 }
 
 measure_text :: proc(text: string, font: Maybe(rl.Font) = nil, font_size: Maybe(f32) = nil) -> [2]f32 {
@@ -393,12 +395,12 @@ measure_text :: proc(text: string, font: Maybe(rl.Font) = nil, font_size: Maybe(
     return rl_measure_text(font, text, font_size, 0)
 }
 
-begin_scissor_mode :: proc(x, y, w, h: f32, zindex: u8 = get_container().zindex) {
-    draw_queue_push(&global_draw_queue, zindex, Scissor{x, y, w, h, true})
+begin_clip :: proc(x, y, w, h: f32, zindex: u8 = get_container().zindex) {
+    draw_queue_push(&global_draw_queue, zindex, Command_Clip{x, y, w, h, true})
 }
 
-end_scissor_mode :: proc(zindex: u8 = get_container().zindex) {
-    draw_queue_push(&global_draw_queue, zindex, Scissor{})
+end_clip :: proc(zindex: u8 = get_container().zindex) {
+    draw_queue_push(&global_draw_queue, zindex, Command_Clip{})
 }
 
 draw_base :: proc(x, y, w, h: f32, border_thickness, corner_radius: f32, color, border_color: rl.Color, padding: Padding) -> (nx, ny, nw, nh: f32) {
@@ -605,14 +607,14 @@ row :: proc(h: f32 = 0, item_widths := []f32{}, padding: Padding = {}, item_spac
 //
 
 box_end :: proc(w, h: f32) {
-    end_scissor_mode()
+    end_clip()
     layout_update(w, h)
 }
 
 @(deferred_in=box_end)
 box :: proc(w, h: f32) -> bool {
     layout := get_layout()
-    begin_scissor_mode(layout.xoffset, layout.yoffset, w, h)
+    begin_clip(layout.xoffset, layout.yoffset, w, h)
     return true
 }
 
@@ -636,24 +638,27 @@ get_container :: proc{get_current_container, get_container_from_id}
 container_push_floating :: proc(x, y, w, h: f32, id: Id, zindex := u8(0), padding := Padding{}) {
     container := get_container(id)
 
-    // TODO: we don't want to do this for resizable/movable containers
-    container.x = x
-    container.y = y
-    container.w = w
-    container.h = h
-    container.zindex = zindex
+    if .Moveable not_in container.opts {
+        container.x = x
+        container.y = y
+        container.zindex = zindex
+    }
+    if .Resizable not_in container.opts {
+        container.w = w
+        container.h = h
+    }
     container.command_index = cast(i32)len(global_draw_queue.zqueues[zindex])
 
     layout_push_floating(.Column, x, y, padding = padding)
     append(&global_container_stack, container)
-    begin_scissor_mode(x, y, w, h)
+    begin_clip(x, y, w, h)
 }
 
 container_pop_floating :: proc() -> (w, h: f32) {
     w, h = layout_pop_floating()
 
     container := get_container()
-    cmd       := &global_draw_queue.zqueues[container.zindex][container.command_index].(Scissor)
+    cmd       := &global_draw_queue.zqueues[container.zindex][container.command_index].(Command_Clip)
 
     // we update the scissor area with the proper size of the container is
     // resizable (no change on fixed sizes)
@@ -661,7 +666,7 @@ container_pop_floating :: proc() -> (w, h: f32) {
     if container.h <= 0 do cmd.h = h
 
     pop(&global_container_stack)
-    end_scissor_mode()
+    end_clip()
     return
 }
 
@@ -688,26 +693,26 @@ pane_end :: proc() {
     w, h      := layout.w + layout.padding.l + layout.padding.r, layout.h + layout.padding.t + layout.padding.b
 
     // background
-    cmd_bg := &global_draw_queue.zqueues[container.zindex][container.command_index + 1].(Rect)
+    cmd_bg := &global_draw_queue.zqueues[container.zindex][container.command_index + 1].(Command_Rect)
     cmd_bg.w = w
     cmd_bg.h = h
 
     // left border
-    cmd_b_l := &global_draw_queue.zqueues[container.zindex][container.command_index + 2].(Rect)
+    cmd_b_l := &global_draw_queue.zqueues[container.zindex][container.command_index + 2].(Command_Rect)
     cmd_b_l.h = h
 
     // right border
-    cmd_b_r := &global_draw_queue.zqueues[container.zindex][container.command_index + 3].(Rect)
+    cmd_b_r := &global_draw_queue.zqueues[container.zindex][container.command_index + 3].(Command_Rect)
     cmd_b_r.h = h
     layout.xoffset += cmd_b_r.w
     layout.w += cmd_b_r.w
 
     // top border
-    cmd_b_t := &global_draw_queue.zqueues[container.zindex][container.command_index + 4].(Rect)
+    cmd_b_t := &global_draw_queue.zqueues[container.zindex][container.command_index + 4].(Command_Rect)
     cmd_b_t.w = w
 
     // bottom border
-    cmd_b_b := &global_draw_queue.zqueues[container.zindex][container.command_index + 5].(Rect)
+    cmd_b_b := &global_draw_queue.zqueues[container.zindex][container.command_index + 5].(Command_Rect)
     cmd_b_b.w = w
     layout.yoffset += cmd_b_r.h
     layout.h += cmd_b_r.h
@@ -733,16 +738,9 @@ pane :: proc(
     //background
     draw_rect(layout.x, layout.y, 0, 0, bg_color)
 
-    // left border
     draw_rect(layout.x, layout.y, border_thickness.l, 0, border_color.l)
-
-    // right border
     draw_rect(layout.x, layout.y, border_thickness.r, 0, border_color.r)
-
-    // top border
     draw_rect(layout.x, layout.y, 0, border_thickness.t, border_color.t)
-
-    // right border
     draw_rect(layout.x, layout.y, 0, border_thickness.b, border_color.b)
 
     layout.w += border_thickness.l
@@ -752,18 +750,30 @@ pane :: proc(
     return true
 }
 
+// tabs ////////////////////////////////////////////////////////////////////////
+
+// TODO
+
 // window //////////////////////////////////////////////////////////////////////
 
 // TODO: popup and dragable windows?
 
 // component utility functions /////////////////////////////////////////////////
 
+point_in_region :: proc(x, y: f32, clip: Rect) -> bool {
+    xb := clip.x
+    xe := clip.x + clip.w
+    yb := clip.y
+    ye := clip.y + clip.h
+    return (xb <= x && x < xe) && (yb <= y && y < ye)
+}
+
 //
 // Logic for clickable components
 //
 is_component_clicked :: proc(id: Id, x, y, w, h: f32) -> (clicked: bool) {
     if global_active_id == 0 || global_active_id == id {
-        if rl.CheckCollisionPointRec(global_mouse_position, {x, y, w, h}) {
+        if point_in_region(global_mouse_position.x, global_mouse_position.y, {x, y, w, h}) {
             global_hot_id = id
         }
         if global_mouse_left_down {
@@ -785,9 +795,9 @@ is_component_clicked :: proc(id: Id, x, y, w, h: f32) -> (clicked: bool) {
 // text ////////////////////////////////////////////////////////////////////////
 
 text_floating :: proc(x, y, w, h: f32, content: string, color := style_ui.text_color, loc := #caller_location) {
-    begin_scissor_mode(x, y, w, h)
+    begin_clip(x, y, w, h)
     draw_text(content, x, y, color)
-    end_scissor_mode()
+    end_clip()
 }
 
 text :: proc(content: string, color := style_ui.text_color, loc := #caller_location) {
@@ -1078,7 +1088,7 @@ text_input_floating :: proc(x, y, w, h: f32, builder: ^strings.Builder, style :=
     content   := strings.to_string(builder^)
     selection := global_edit_state.selection
 
-    begin_scissor_mode(x, y, w, h)
+    begin_clip(x, y, w, h)
     if focused {
 
         // update the scroll offset
@@ -1123,7 +1133,7 @@ text_input_floating :: proc(x, y, w, h: f32, builder: ^strings.Builder, style :=
         // not focused, draw text
         draw_text(content, x, y, style.text_color)
     }
-    end_scissor_mode()
+    end_clip()
     return
 }
 
