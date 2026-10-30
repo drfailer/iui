@@ -101,8 +101,11 @@ global_mouse_position  : [2]f32
 global_mouse_left_down : bool
 
 global_layout_stack    : [dynamic; LAYOUT_STACK_SIZE]Layout
-global_container_stack : [dynamic; CONTAINER_STACK_SIZE]Container
+global_container_stack : [dynamic; CONTAINER_STACK_SIZE]^Container
 global_id_stack        : [dynamic; ID_STACK_SIZE]int
+
+global_container_map   : map[Id]^Container // TODO: find a way to avoid double hashing
+global_container_arena : mem.Dynamic_Arena
 
 global_edit_undo_state_scratch : mem.Scratch
 global_edit_undo_text_scratch  : mem.Scratch
@@ -277,6 +280,8 @@ init :: proc() {
               mem.scratch_allocator(&global_edit_undo_state_scratch),
               mem.scratch_allocator(&global_edit_undo_text_scratch))
     draw_queue_init(&global_draw_queue)
+    mem.dynamic_arena_init(&global_container_arena)
+    global_container_map = make(map[Id]^Container)
 }
 
 fini :: proc() {
@@ -284,6 +289,8 @@ fini :: proc() {
     edit.destroy(&global_edit_state)
     mem.scratch_destroy(&global_edit_undo_state_scratch)
     mem.scratch_destroy(&global_edit_undo_text_scratch)
+    mem.dynamic_arena_destroy(&global_container_arena)
+    delete(global_container_map)
 }
 
 init_frame :: proc() {
@@ -295,7 +302,7 @@ init_frame :: proc() {
 
     // reset container stack
     clear(&global_container_stack)
-    append(&global_container_stack, Container{})
+    append(&global_container_stack, get_container(0))
 
     // get events (things can change within a frame so we collect at the start)
     global_mouse_position = rl.GetMousePosition()
@@ -611,20 +618,34 @@ box :: proc(w, h: f32) -> bool {
 
 // container ////////////////////////////////////////////////////////////////////
 
-get_container :: proc() -> ^Container {
-    return &global_container_stack[len(global_container_stack) - 1]
+get_current_container :: proc() -> ^Container {
+    return global_container_stack[len(global_container_stack) - 1]
 }
 
-container_push_floating :: proc(x, y, w, h: f32, zindex := u8(0), padding := Padding{}) {
+get_container_from_id :: proc(id: Id) -> ^Container {
+    if container, ok := global_container_map[id]; ok {
+        return container
+    }
+    container := new(Container, mem.dynamic_arena_allocator(&global_container_arena))
+    global_container_map[id] = container
+    return container
+}
+
+get_container :: proc{get_current_container, get_container_from_id}
+
+container_push_floating :: proc(x, y, w, h: f32, id: Id, zindex := u8(0), padding := Padding{}) {
+    container := get_container(id)
+
+    // TODO: we don't want to do this for resizable/movable containers
+    container.x = x
+    container.y = y
+    container.w = w
+    container.h = h
+    container.zindex = zindex
+    container.command_index = cast(i32)len(global_draw_queue.zqueues[zindex])
+
     layout_push_floating(.Column, x, y, padding = padding)
-    append(&global_container_stack, {
-        x             = x,
-        y             = y,
-        w             = w,
-        h             = h,
-        zindex        = zindex,
-        command_index = cast(i32)len(global_draw_queue.zqueues[zindex])
-    })
+    append(&global_container_stack, container)
     begin_scissor_mode(x, y, w, h)
 }
 
@@ -644,9 +665,9 @@ container_pop_floating :: proc() -> (w, h: f32) {
     return
 }
 
-container_push :: proc(padding := Padding{}) {
+container_push :: proc(id: Id, padding := Padding{}) {
     layout := get_layout()
-    container_push_floating(layout.xoffset, layout.yoffset, 0, 0, 0, padding)
+    container_push_floating(layout.xoffset, layout.yoffset, 0, 0, id, 0, padding)
 }
 
 container_pop :: proc() {
@@ -702,8 +723,11 @@ pane :: proc(
     border_color    : Border_Data(rl.Color) = {},
     border_thickness: Border_Data(f32) = {},
     padding         : Padding = {},
+    loc := #caller_location,
 ) -> bool {
-    container_push(padding)
+    id := get_id(loc)
+
+    container_push(id, padding)
     layout := get_layout()
 
     //background
@@ -934,7 +958,7 @@ header :: proc(label: string, opened: ^bool, level := 0, w: Maybe(f32) = nil, lo
     height      := compute_layout_item_height(max(label_size.y, symbol_size.y) + style.padding.t + style.padding.b + 2*style.border_thickness)
     x, y, w, h  := layout.xoffset, layout.yoffset, width, height
 
-    container_push()
+    container_push(id)
 
     // update globals
     if is_component_clicked(id, x, y, w, h) {
