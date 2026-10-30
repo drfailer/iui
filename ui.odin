@@ -214,7 +214,7 @@ style_header := Header_Style{
         closed_symbol    = "+",
     },
 }
-HEADER_SYMBOL_SPACING :: 10
+HEADER_SYMBOL_SPACING :: 20
 
 // Text Input //////////////////////////
 
@@ -938,7 +938,9 @@ header :: proc(label: string, opened: ^bool, level := 0, w: Maybe(f32) = nil, lo
         label_x := x
         label_y := y + (h - label_size.y) / 2
         draw_text(label, label_x, label_y, style.text_color)
-        symbol_x := width - style.border_thickness - style.padding.r - symbol_size.x
+
+        // symbol
+        symbol_x := x + (w - symbol_size.x)
         symbol_y := y + (h - symbol_size.y) / 2
         draw_text(symbol, symbol_x, symbol_y, style.text_color)
     }

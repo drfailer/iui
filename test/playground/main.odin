@@ -36,7 +36,7 @@ main :: proc() {
             if ui.row(padding = {4, 4, 4, 4}, item_spacing = 10) {
 
                 @(static) buttons_header_status: bool
-                if ui.header("header", &buttons_header_status, w = 100) {
+                if ui.header("header", &buttons_header_status) {
                     ui.text("test")
                 }
 
