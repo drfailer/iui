@@ -1082,7 +1082,7 @@ text_input_floating :: proc(x, y, w, h: f32, builder: ^strings.Builder, style :=
             draw_text(text_before_selection, x, y, style.selected_text_color)
             x += measure_text(text_before_selection).x
 
-            draw_rect(x, y, selection_size.x, selection_size.y, style.selection_color)
+            draw_rect(x, y, selection_size.x, style_ui.font_size, style.selection_color)
 
             draw_text(text_selected, x, y, style.selected_text_color)
             x += measure_text(text_selected).x
@@ -1107,7 +1107,7 @@ text_input :: proc(builder: ^strings.Builder, w: Maybe(f32) = nil, h: Maybe(f32)
     layout := get_layout()
     text_size := measure_text(strings.to_string(builder^))
     w := w.? or_else compute_layout_item_width(text_size.x + style.padding.l + style.padding.r)
-    h := h.? or_else compute_layout_item_height(text_size.y + style.padding.t + style.padding.b)
+    h := h.? or_else compute_layout_item_height(style_ui.font_size + style.padding.t + style.padding.b)
     submitted = text_input_floating(layout.xoffset, layout.yoffset, w, h, builder, style, loc)
     layout_update(w, h)
     return
