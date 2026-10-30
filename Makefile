@@ -2,7 +2,7 @@
 .PHONY: run
 
 playground:
-	odin build test/playground -collection:olib=../
+	odin build test/playground -collection:olib=../ -debug
 
 run:
 	./playground
