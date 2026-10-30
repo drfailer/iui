@@ -18,6 +18,7 @@ import rl "vendor:raylib"
 // TODO: pane border
 // TODO: scrollbox
 // TODO: header title external padding (outside of the rectangle)
+// TODO: style should be an argument
 
 // constants ///////////////////////////////////////////////////////////////////
 
@@ -366,6 +367,25 @@ begin_scissor_mode :: proc(x, y, w, h: f32) {
 
 end_scissor_mode :: proc() {
     append(&global_draw_queue, Scissor{})
+}
+
+draw_base :: proc(x, y, w, h: f32, border_thickness, corner_radius: f32, color, border_color: rl.Color, padding: Padding) -> (nx, ny, nw, nh: f32) {
+    nx, ny, nw, nh = x, y, w, h
+
+    // border
+    draw_rect(nx, ny, nw, nh, border_color, corner_radius)
+    nx += border_thickness
+    ny += border_thickness
+    nw -= 2*border_thickness
+    nh -= 2*border_thickness
+
+    // background
+    draw_rect(nx, ny, nw, nh, color, corner_radius)
+    nx += padding.l
+    ny += padding.t
+    nw -= padding.l + padding.r
+    nh -= padding.t + padding.b
+    return
 }
 
 // layout ///////////////////////////////////////////////////////////////////////
@@ -740,32 +760,16 @@ textf :: proc(f: string, data: ..any, color := style_ui.text_color, loc := #call
 // button //////////////////////////////////////////////////////////////////////
 
 button_floating :: proc(x, y, w, h: f32, label: string, loc := #caller_location) -> (clicked: bool) {
+    style := style_button
     id := get_id(loc)
 
     clicked = is_component_clicked(id, x, y, w, h)
+    color := style_button.color
+    if global_active_id == id do color = style.pressed_color
+    else if global_hot_id == id do color = style.hover_color
 
     // draw
-    x, y, w, h := x, y, w, h
-
-    // border
-    draw_rect(x, y, w, h, style_button.border_color, style_button.corner_radius)
-    x += style_button.border_thickness
-    y += style_button.border_thickness
-    w -= 2 * style_button.border_thickness
-    h -= 2 * style_button.border_thickness
-
-    // inside
-    if global_active_id == id {
-        draw_rect(x, y, w, h, style_button.pressed_color, style_button.corner_radius)
-    } else if global_hot_id == id {
-        draw_rect(x, y, w, h, style_button.hover_color, style_button.corner_radius)
-    } else {
-        draw_rect(x, y, w, h, style_button.color, style_button.corner_radius)
-    }
-    x += style_button.padding.l
-    y += style_button.padding.t
-    w -= style_button.padding.l + style_button.padding.r
-    h -= style_button.padding.t + style_button.padding.b
+    x, y, w, h := draw_base(x, y, w, h, style.border_thickness, style.corner_radius, color, style.border_color, style.padding)
 
     // text
     text_size := measure_text(label)
@@ -914,25 +918,11 @@ header :: proc(label: string, opened: ^bool, level := 0, w: Maybe(f32) = nil, lo
     }
 
     {
-        // border
-        draw_rect(x, y, w, h, style.border_color)
-        x += style.border_thickness
-        y += style.border_thickness
-        w -= 2 * style.border_thickness
-        h -= 2 * style.border_thickness
+        color := style.color
+        if global_active_id == id do color = style.pressed_color
+        else if global_hot_id == id do color = style.hover_color
 
-        // background
-        if global_active_id == id {
-            draw_rect(x, y, w, h, style.pressed_color)
-        } else if global_hot_id == id {
-            draw_rect(x, y, w, h, style.hover_color)
-        } else {
-            draw_rect(x, y, w, h, style.color)
-        }
-        x += style.padding.l
-        y += style.padding.t
-        w -= style.padding.l + style.padding.r
-        h -= style.padding.t + style.padding.b
+        x, y, w, h = draw_base(x, y, w, h, style.border_thickness, 0, color, style.border_color, style.padding)
 
         // text
         label_x := x
@@ -952,6 +942,7 @@ header :: proc(label: string, opened: ^bool, level := 0, w: Maybe(f32) = nil, lo
 // text input //////////////////////////////////////////////////////////////////
 
 text_input_floating :: proc(x, y, w, h: f32, builder: ^strings.Builder, loc := #caller_location) -> (submitted: bool) {
+    style := style_text_input
     @(static) scroll_xoffset : f32 = 0 // used to scroll the text when it goes out of the box
     id := get_id(loc)
     focused: bool
@@ -1028,27 +1019,13 @@ text_input_floating :: proc(x, y, w, h: f32, builder: ^strings.Builder, loc := #
     x, y, w, h := x, y, w, h
 
     // this is a single line input so we centered the box on h
-    box_h := style_ui.font_size + style_text_input.padding.t + style_text_input.padding.b
+    box_h := style_ui.font_size + style.padding.t + style.padding.b
     y += (h - box_h)/2
     h = box_h
 
-    // border
-    draw_rect(x, y, w, h, style_text_input.border_color)
-    x += 1
-    y += 1
-    w -= 2
-    h -= 2
-
-    // background
-    if focused {
-        draw_rect(x, y, w, h, style_text_input.focused_background_color)
-    } else {
-        draw_rect(x, y, w, h, style_text_input.idle_background_color)
-    }
-    x += style_text_input.padding.l
-    y += style_text_input.padding.t
-    w -= style_text_input.padding.l + style_text_input.padding.r
-    h -= style_text_input.padding.t + style_text_input.padding.b
+    color := style.idle_background_color
+    if focused do color = style.focused_background_color
+    x, y, w, h = draw_base(x, y, w, h, 1, 0, color, style.border_color, style.padding)
 
     // text
     content   := strings.to_string(builder^)
@@ -1079,35 +1056,36 @@ text_input_floating :: proc(x, y, w, h: f32, builder: ^strings.Builder, loc := #
             text_after_selection  := string(content[se:])
             selection_size        := measure_text(text_selected)
 
-            draw_text(text_before_selection, x, y, style_text_input.selected_text_color)
+            draw_text(text_before_selection, x, y, style.selected_text_color)
             x += measure_text(text_before_selection).x
 
-            draw_rect(x, y, selection_size.x, selection_size.y, style_text_input.selection_color)
+            draw_rect(x, y, selection_size.x, selection_size.y, style.selection_color)
 
-            draw_text(text_selected, x, y, style_text_input.selected_text_color)
+            draw_text(text_selected, x, y, style.selected_text_color)
             x += measure_text(text_selected).x
 
-            draw_text(text_after_selection, x, y, style_text_input.text_color)
+            draw_text(text_after_selection, x, y, style.text_color)
         } else {
             // no selection but focused: draw text and caret
-            draw_text(content, x, y, style_text_input.text_color)
+            draw_text(content, x, y, style.text_color)
             caret_index := clamp(selection[0], 0, len(content))
             text_size := measure_text(content[:caret_index])
-            draw_rect(x + text_size.x, y, TEXT_INPUT_CARET_SIZE, style_ui.font_size, style_text_input.caret_color)
+            draw_rect(x + text_size.x, y, TEXT_INPUT_CARET_SIZE, style_ui.font_size, style.caret_color)
         }
     } else {
         // not focused, draw text
-        draw_text(content, x, y, style_text_input.text_color)
+        draw_text(content, x, y, style.text_color)
     }
     end_scissor_mode()
     return
 }
 
 text_input :: proc(builder: ^strings.Builder, w: Maybe(f32) = nil, h: Maybe(f32) = nil, loc := #caller_location) -> (submitted: bool) {
+    style := style_text_input
     layout := get_layout()
     text_size := measure_text(strings.to_string(builder^))
-    w := w.? or_else compute_layout_item_width(text_size.x + style_text_input.padding.l + style_text_input.padding.r)
-    h := h.? or_else compute_layout_item_height(text_size.y + style_text_input.padding.t + style_text_input.padding.b)
+    w := w.? or_else compute_layout_item_width(text_size.x + style.padding.l + style.padding.r)
+    h := h.? or_else compute_layout_item_height(text_size.y + style.padding.t + style.padding.b)
     submitted = text_input_floating(layout.xoffset, layout.yoffset, w, h, builder, loc)
     layout_update(w, h)
     return
