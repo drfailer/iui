@@ -40,7 +40,7 @@ Border_Data :: struct($T: typeid) { l, r, t, b: T }
 
 Container :: struct {
     x, y, w, h : f32,
-    zindex : i32, // TODO
+    zindex : u8,
     command_index : i32, // used if we need to modify draw commands (when using a background color)
 }
 
@@ -57,13 +57,36 @@ Layout :: struct {
     item_index    : int,
 }
 
+Measure_Text_Proc :: #type proc(text: string, font: rl.Font)
+
+// draw queue //////////////////////////////////////////////////////////////////
+
 Rect :: struct { x, y, w, h, corner_radius: f32, color: rl.Color }
 Text :: struct { text: string, x, y: f32, font: rl.Font, font_size: f32, color: rl.Color }
 Scissor :: struct { x, y, w, h: f32, begin: bool }
 Draw_Command :: union { Rect, Text, Scissor }
 
-Measure_Text_Proc :: #type proc(text: string, font: rl.Font)
+Draw_Queue :: struct {
+    zqueues   : [256][dynamic]Draw_Command,
+    max_index : u8,
+    allocator : mem.Allocator,
+}
 
+draw_queue_init :: proc(queue: ^Draw_Queue, allocator := context.allocator) {
+    queue.allocator = allocator
+    queue.zqueues[0] = make([dynamic]Draw_Command, allocator = allocator)
+}
+
+draw_queue_destroy :: proc(queue: ^Draw_Queue) {
+    for &queue in queue.zqueues {
+        delete(queue)
+    }
+}
+
+draw_queue_push :: proc(queue: ^Draw_Queue, zindex: u8, command: Draw_Command) {
+    append(&queue.zqueues[zindex], command)
+    queue.max_index = max(queue.max_index, zindex)
+}
 
 // globals /////////////////////////////////////////////////////////////////////
 
@@ -71,7 +94,7 @@ global_hot_id     : Id
 global_active_id  : Id
 global_focus_flag : bool
 
-global_draw_queue        : [dynamic]Draw_Command
+global_draw_queue        : Draw_Queue
 global_measure_text_proc : Measure_Text_Proc
 
 global_mouse_position  : [2]f32
@@ -253,11 +276,11 @@ init :: proc() {
     edit.init(&global_edit_state,
               mem.scratch_allocator(&global_edit_undo_state_scratch),
               mem.scratch_allocator(&global_edit_undo_text_scratch))
-    global_draw_queue = make([dynamic]Draw_Command)
+    draw_queue_init(&global_draw_queue)
 }
 
 fini :: proc() {
-    delete(global_draw_queue)
+    draw_queue_destroy(&global_draw_queue)
     edit.destroy(&global_edit_state)
     mem.scratch_destroy(&global_edit_undo_state_scratch)
     mem.scratch_destroy(&global_edit_undo_text_scratch)
@@ -286,26 +309,28 @@ fini_frame :: proc() {
         global_active_id = 0
     }
 
-    for cmd_variant in global_draw_queue {
-        switch cmd in cmd_variant {
-        case Rect:
-            // TODO: add the border to the options
-            if cmd.corner_radius == 0 {
-                rl.DrawRectangleRec({cmd.x, cmd.y, cmd.w, cmd.h}, cmd.color)
-            } else {
-                rl.DrawRectangleRounded({cmd.x, cmd.y, cmd.w, cmd.h}, cmd.corner_radius, 4, cmd.color)
-            }
-        case Text:
-            rl_draw_text_ex(cmd.font, cmd.text, {cmd.x, cmd.y}, cmd.font_size, 0, cmd.color)
-        case Scissor:
-            if cmd.begin {
-                rl.BeginScissorMode(cast(c.int)cmd.x, cast(c.int)cmd.y, cast(c.int)cmd.w, cast(c.int)cmd.h)
-            } else {
-                rl.EndScissorMode()
+    for &zqueue in global_draw_queue.zqueues[:global_draw_queue.max_index + 1] {
+        for cmd_variant in zqueue {
+            switch cmd in cmd_variant {
+            case Rect:
+                // TODO: add the border to the options
+                if cmd.corner_radius == 0 {
+                    rl.DrawRectangleRec({cmd.x, cmd.y, cmd.w, cmd.h}, cmd.color)
+                } else {
+                    rl.DrawRectangleRounded({cmd.x, cmd.y, cmd.w, cmd.h}, cmd.corner_radius, 4, cmd.color)
+                }
+            case Text:
+                rl_draw_text_ex(cmd.font, cmd.text, {cmd.x, cmd.y}, cmd.font_size, 0, cmd.color)
+            case Scissor:
+                if cmd.begin {
+                    rl.BeginScissorMode(cast(c.int)cmd.x, cast(c.int)cmd.y, cast(c.int)cmd.w, cast(c.int)cmd.h)
+                } else {
+                    rl.EndScissorMode()
+                }
             }
         }
+        clear(&zqueue)
     }
-    clear(&global_draw_queue)
     rl.EndDrawing()
     free_all(context.temp_allocator)
 }
@@ -345,14 +370,14 @@ get_id :: proc(loc: runtime.Source_Code_Location) -> Id {
     return hash.fnv32a(data)
 }
 
-draw_rect :: proc(x, y, w, h: f32, color: rl.Color, corner_radius: f32 = 0) {
-    append(&global_draw_queue, Rect{x, y, w, h, corner_radius, color})
+draw_rect :: proc(x, y, w, h: f32, color: rl.Color, corner_radius: f32 = 0, zindex: u8 = get_container().zindex) {
+    draw_queue_push(&global_draw_queue, zindex, Rect{x, y, w, h, corner_radius, color})
 }
 
-draw_text :: proc(text: string, x, y: f32, color: rl.Color, font: Maybe(rl.Font) = nil, font_size: Maybe(f32) = nil) {
+draw_text :: proc(text: string, x, y: f32, color: rl.Color, font: Maybe(rl.Font) = nil, font_size: Maybe(f32) = nil, zindex: u8 = get_container().zindex) {
     font      := font.?      or_else style_ui.font
     font_size := font_size.? or_else style_ui.font_size
-    append(&global_draw_queue, Text{text, x, y, font, font_size, color})
+    draw_queue_push(&global_draw_queue, zindex, Text{text, x, y, font, font_size, color})
 }
 
 measure_text :: proc(text: string, font: Maybe(rl.Font) = nil, font_size: Maybe(f32) = nil) -> [2]f32 {
@@ -361,12 +386,12 @@ measure_text :: proc(text: string, font: Maybe(rl.Font) = nil, font_size: Maybe(
     return rl_measure_text(font, text, font_size, 0)
 }
 
-begin_scissor_mode :: proc(x, y, w, h: f32) {
-    append(&global_draw_queue, Scissor{x, y, w, h, true})
+begin_scissor_mode :: proc(x, y, w, h: f32, zindex: u8 = get_container().zindex) {
+    draw_queue_push(&global_draw_queue, zindex, Scissor{x, y, w, h, true})
 }
 
-end_scissor_mode :: proc() {
-    append(&global_draw_queue, Scissor{})
+end_scissor_mode :: proc(zindex: u8 = get_container().zindex) {
+    draw_queue_push(&global_draw_queue, zindex, Scissor{})
 }
 
 draw_base :: proc(x, y, w, h: f32, border_thickness, corner_radius: f32, color, border_color: rl.Color, padding: Padding) -> (nx, ny, nw, nh: f32) {
@@ -590,7 +615,7 @@ get_container :: proc() -> ^Container {
     return &global_container_stack[len(global_container_stack) - 1]
 }
 
-container_push_floating :: proc(x, y, w, h: f32, zindex := i32(0), padding := Padding{}) {
+container_push_floating :: proc(x, y, w, h: f32, zindex := u8(0), padding := Padding{}) {
     layout_push_floating(.Column, x, y, padding = padding)
     append(&global_container_stack, {
         x             = x,
@@ -598,7 +623,7 @@ container_push_floating :: proc(x, y, w, h: f32, zindex := i32(0), padding := Pa
         w             = w,
         h             = h,
         zindex        = zindex,
-        command_index = cast(i32)len(global_draw_queue)
+        command_index = cast(i32)len(global_draw_queue.zqueues[zindex])
     })
     begin_scissor_mode(x, y, w, h)
 }
@@ -607,7 +632,7 @@ container_pop_floating :: proc() -> (w, h: f32) {
     w, h = layout_pop_floating()
 
     container := get_container()
-    cmd       := &global_draw_queue[container.command_index].(Scissor)
+    cmd       := &global_draw_queue.zqueues[container.zindex][container.command_index].(Scissor)
 
     // we update the scissor area with the proper size of the container is
     // resizable (no change on fixed sizes)
@@ -642,26 +667,26 @@ pane_end :: proc() {
     w, h      := layout.w + layout.padding.l + layout.padding.r, layout.h + layout.padding.t + layout.padding.b
 
     // background
-    cmd_bg := &global_draw_queue[container.command_index + 1].(Rect)
+    cmd_bg := &global_draw_queue.zqueues[container.zindex][container.command_index + 1].(Rect)
     cmd_bg.w = w
     cmd_bg.h = h
 
     // left border
-    cmd_b_l := &global_draw_queue[container.command_index + 2].(Rect)
+    cmd_b_l := &global_draw_queue.zqueues[container.zindex][container.command_index + 2].(Rect)
     cmd_b_l.h = h
 
     // right border
-    cmd_b_r := &global_draw_queue[container.command_index + 3].(Rect)
+    cmd_b_r := &global_draw_queue.zqueues[container.zindex][container.command_index + 3].(Rect)
     cmd_b_r.h = h
     layout.xoffset += cmd_b_r.w
     layout.w += cmd_b_r.w
 
     // top border
-    cmd_b_t := &global_draw_queue[container.command_index + 4].(Rect)
+    cmd_b_t := &global_draw_queue.zqueues[container.zindex][container.command_index + 4].(Rect)
     cmd_b_t.w = w
 
     // bottom border
-    cmd_b_b := &global_draw_queue[container.command_index + 5].(Rect)
+    cmd_b_b := &global_draw_queue.zqueues[container.zindex][container.command_index + 5].(Rect)
     cmd_b_b.w = w
     layout.yoffset += cmd_b_r.h
     layout.h += cmd_b_r.h
@@ -759,12 +784,11 @@ textf :: proc(f: string, data: ..any, color := style_ui.text_color, loc := #call
 
 // button //////////////////////////////////////////////////////////////////////
 
-button_floating :: proc(x, y, w, h: f32, label: string, loc := #caller_location) -> (clicked: bool) {
-    style := style_button
+button_floating :: proc(x, y, w, h: f32, label: string, style := style_button, loc := #caller_location) -> (clicked: bool) {
     id := get_id(loc)
 
     clicked = is_component_clicked(id, x, y, w, h)
-    color := style_button.color
+    color := style.color
     if global_active_id == id do color = style.pressed_color
     else if global_hot_id == id do color = style.hover_color
 
@@ -775,20 +799,20 @@ button_floating :: proc(x, y, w, h: f32, label: string, loc := #caller_location)
     text_size := measure_text(label)
     text_x := x + (w - text_size.x) / 2
     text_y := y + (h - text_size.y) / 2
-    draw_text(label, text_x, text_y, style_button.text_color)
+    draw_text(label, text_x, text_y, style.text_color)
 
     // return if the button has been clicked
     return clicked
 }
 
-button_label :: proc(label: string, w: Maybe(f32) = nil, h: Maybe(f32) = nil, index := 0, loc := #caller_location) -> (clicked: bool) {
+button_label :: proc(label: string, w: Maybe(f32) = nil, h: Maybe(f32) = nil, style := style_button, loc := #caller_location) -> (clicked: bool) {
     layout := get_layout()
     text_size := measure_text(label)
-    padding := style_button.padding
+    padding := style.padding
     w := w.? or_else compute_layout_item_width(text_size.x + padding.l + padding.r)
     h := h.? or_else compute_layout_item_height(text_size.y + padding.t + padding.b)
     if w > 0 && h > 0 {
-        clicked = button_floating(layout.xoffset, layout.yoffset, w, h, label, loc)
+        clicked = button_floating(layout.xoffset, layout.yoffset, w, h, label, style, loc)
     }
     layout_update(w, h)
     return clicked
@@ -802,7 +826,7 @@ button :: proc{
 
 // checkbox ////////////////////////////////////////////////////////////////////
 
-checkbox_floating :: proc(x, y, w, h: f32, label: string, checked: ^bool, loc := #caller_location) -> (clicked: bool) {
+checkbox_floating :: proc(x, y, w, h: f32, label: string, checked: ^bool, style := style_checkbox, loc := #caller_location) -> (clicked: bool) {
     id       := get_id(loc)
     box_size := style_ui.font_size
 
@@ -812,32 +836,32 @@ checkbox_floating :: proc(x, y, w, h: f32, label: string, checked: ^bool, loc :=
         checked^ = !(checked^)
     }
 
-    draw_rect(x,                                   y,                                   box_size,             CHECKBOX_BORDER_SIZE, style_checkbox.box_color)
-    draw_rect(x,                                   y,                                   CHECKBOX_BORDER_SIZE, box_size,             style_checkbox.box_color)
-    draw_rect(x,                                   y + box_size - CHECKBOX_BORDER_SIZE, box_size,             CHECKBOX_BORDER_SIZE, style_checkbox.box_color)
-    draw_rect(x + box_size - CHECKBOX_BORDER_SIZE, y,                                   CHECKBOX_BORDER_SIZE, box_size,             style_checkbox.box_color)
+    draw_rect(x,                                   y,                                   box_size,             CHECKBOX_BORDER_SIZE, style.box_color)
+    draw_rect(x,                                   y,                                   CHECKBOX_BORDER_SIZE, box_size,             style.box_color)
+    draw_rect(x,                                   y + box_size - CHECKBOX_BORDER_SIZE, box_size,             CHECKBOX_BORDER_SIZE, style.box_color)
+    draw_rect(x + box_size - CHECKBOX_BORDER_SIZE, y,                                   CHECKBOX_BORDER_SIZE, box_size,             style.box_color)
     if checked^ {
-        draw_rect(x + 4, y + 4, box_size - 8, box_size - 8, style_checkbox.box_color)
+        draw_rect(x + 4, y + 4, box_size - 8, box_size - 8, style.box_color)
     }
-    draw_text(label, x + box_size + CHECKBOX_LABEL_SPACING, y, style_checkbox.label_color)
+    draw_text(label, x + box_size + CHECKBOX_LABEL_SPACING, y, style.label_color)
 
     return clicked
 }
 
-checkbox :: proc(label: string, checked: ^bool, loc := #caller_location) -> (clicked: bool) {
+checkbox :: proc(label: string, checked: ^bool, style := style_checkbox, loc := #caller_location) -> (clicked: bool) {
     layout    := get_layout()
     text_size := measure_text(label)
     assert(text_size.y == style_ui.font_size)
     w := style_ui.font_size + CHECKBOX_LABEL_SPACING + text_size.x
     h := style_ui.font_size
-    clicked = checkbox_floating(layout.xoffset, layout.yoffset, w, h, label, checked, loc)
+    clicked = checkbox_floating(layout.xoffset, layout.yoffset, w, h, label, checked, style, loc)
     layout_update(w, h)
     return clicked
 }
 
 // slider //////////////////////////////////////////////////////////////////////
 
-slider_floating :: proc(x, y, w, h: f32, lower_bound, upper_bound: $T, value: ^T, loc := #caller_location) -> (updated: bool) {
+slider_floating :: proc(x, y, w, h: f32, lower_bound, upper_bound: $T, value: ^T, style := style_slider, loc := #caller_location) -> (updated: bool) {
     id := get_id(loc)
     value_range := cast(f32)(upper_bound - lower_bound)
 
@@ -852,19 +876,19 @@ slider_floating :: proc(x, y, w, h: f32, lower_bound, upper_bound: $T, value: ^T
 
     // bar + border
     bw := w
-    bh := style_slider.bar_height + 2*style_slider.border_thickness
+    bh := style.bar_height + 2*style.border_thickness
     bx := x
     by := y + (h - bh)/2
 
-    if style_slider.border_thickness > 0 {
-        draw_rect(bx, by, bw, bh, style_slider.border_color)
-        bx += style_slider.border_thickness
-        by += style_slider.border_thickness
-        bw -= 2*style_slider.border_thickness
-        bh -= 2*style_slider.border_thickness
+    if style.border_thickness > 0 {
+        draw_rect(bx, by, bw, bh, style.border_color)
+        bx += style.border_thickness
+        by += style.border_thickness
+        bw -= 2*style.border_thickness
+        bh -= 2*style.border_thickness
     }
-    draw_rect(bx, by, bw, bh, style_slider.bar_color)
-    bw -= style_slider.thumb_width
+    draw_rect(bx, by, bw, bh, style.bar_color)
+    bw -= style.thumb_width
 
     if global_active_id == id {
         ratio := clamp(global_mouse_position.x - bx, 0, bw) / bw
@@ -874,19 +898,19 @@ slider_floating :: proc(x, y, w, h: f32, lower_bound, upper_bound: $T, value: ^T
     }
 
     // thumb
-    tw := style_slider.thumb_width
-    th := style_slider.thumb_height
+    tw := style.thumb_width
+    th := style.thumb_height
     tx := bx + bw * (cast(f32)value^ / value_range)
     ty := y + (h - th)/2
-    draw_rect(tx, ty, tw, th, style_slider.thumb_color)
+    draw_rect(tx, ty, tw, th, style.thumb_color)
     return
 }
 
-slider :: proc(lower_bound, upper_bound: $T, value: ^T, w: Maybe(f32) = nil, h: Maybe(f32) = nil, loc := #caller_location) -> (updated: bool) {
+slider :: proc(lower_bound, upper_bound: $T, value: ^T, w: Maybe(f32) = nil, h: Maybe(f32) = nil, style := style_slider, loc := #caller_location) -> (updated: bool) {
     layout := get_layout()
-    w := w.? or_else compute_layout_item_width(DEFAULT_SLIDER_WIDTH + 2*style_slider.border_thickness)
-    h := h.? or_else compute_layout_item_height(max(style_slider.thumb_height, style_slider.bar_height + 2*style_slider.border_thickness))
-    updated = slider_floating(layout.xoffset, layout.yoffset, w, h, lower_bound, upper_bound, value, loc)
+    w := w.? or_else compute_layout_item_width(DEFAULT_SLIDER_WIDTH + 2*style.border_thickness)
+    h := h.? or_else compute_layout_item_height(max(style.thumb_height, style.bar_height + 2*style.border_thickness))
+    updated = slider_floating(layout.xoffset, layout.yoffset, w, h, lower_bound, upper_bound, value, style, loc)
     layout_update(w, h)
     return
 }
@@ -941,8 +965,7 @@ header :: proc(label: string, opened: ^bool, level := 0, w: Maybe(f32) = nil, lo
 
 // text input //////////////////////////////////////////////////////////////////
 
-text_input_floating :: proc(x, y, w, h: f32, builder: ^strings.Builder, loc := #caller_location) -> (submitted: bool) {
-    style := style_text_input
+text_input_floating :: proc(x, y, w, h: f32, builder: ^strings.Builder, style := style_text_input, loc := #caller_location) -> (submitted: bool) {
     @(static) scroll_xoffset : f32 = 0 // used to scroll the text when it goes out of the box
     id := get_id(loc)
     focused: bool
@@ -1080,13 +1103,12 @@ text_input_floating :: proc(x, y, w, h: f32, builder: ^strings.Builder, loc := #
     return
 }
 
-text_input :: proc(builder: ^strings.Builder, w: Maybe(f32) = nil, h: Maybe(f32) = nil, loc := #caller_location) -> (submitted: bool) {
-    style := style_text_input
+text_input :: proc(builder: ^strings.Builder, w: Maybe(f32) = nil, h: Maybe(f32) = nil, style := style_text_input, loc := #caller_location) -> (submitted: bool) {
     layout := get_layout()
     text_size := measure_text(strings.to_string(builder^))
     w := w.? or_else compute_layout_item_width(text_size.x + style.padding.l + style.padding.r)
     h := h.? or_else compute_layout_item_height(text_size.y + style.padding.t + style.padding.b)
-    submitted = text_input_floating(layout.xoffset, layout.yoffset, w, h, builder, loc)
+    submitted = text_input_floating(layout.xoffset, layout.yoffset, w, h, builder, style, loc)
     layout_update(w, h)
     return
 }
