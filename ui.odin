@@ -748,7 +748,7 @@ button_floating :: proc(x, y, w, h: f32, label: string, loc := #caller_location)
     x, y, w, h := x, y, w, h
 
     // border
-    draw_rect(x, y, w, h, style_button.border_color)
+    draw_rect(x, y, w, h, style_button.border_color, style_button.corner_radius)
     x += style_button.border_thickness
     y += style_button.border_thickness
     w -= 2 * style_button.border_thickness
@@ -756,11 +756,11 @@ button_floating :: proc(x, y, w, h: f32, label: string, loc := #caller_location)
 
     // inside
     if global_active_id == id {
-        draw_rect(x, y, w, h, style_button.pressed_color)
+        draw_rect(x, y, w, h, style_button.pressed_color, style_button.corner_radius)
     } else if global_hot_id == id {
-        draw_rect(x, y, w, h, style_button.hover_color)
+        draw_rect(x, y, w, h, style_button.hover_color, style_button.corner_radius)
     } else {
-        draw_rect(x, y, w, h, style_button.color)
+        draw_rect(x, y, w, h, style_button.color, style_button.corner_radius)
     }
     x += style_button.padding.l
     y += style_button.padding.t
@@ -808,10 +808,10 @@ checkbox_floating :: proc(x, y, w, h: f32, label: string, checked: ^bool, loc :=
         checked^ = !(checked^)
     }
 
-    draw_rect(x,                                y,                                   box_size,             CHECKBOX_BORDER_SIZE, style_checkbox.box_color)
-    draw_rect(x,                                y,                                   CHECKBOX_BORDER_SIZE, box_size,             style_checkbox.box_color)
-    draw_rect(x,                                y + box_size - CHECKBOX_BORDER_SIZE, box_size,             CHECKBOX_BORDER_SIZE, style_checkbox.box_color)
-    draw_rect(x + box_size - CHECKBOX_BORDER_SIZE, y,                                CHECKBOX_BORDER_SIZE, box_size,             style_checkbox.box_color)
+    draw_rect(x,                                   y,                                   box_size,             CHECKBOX_BORDER_SIZE, style_checkbox.box_color)
+    draw_rect(x,                                   y,                                   CHECKBOX_BORDER_SIZE, box_size,             style_checkbox.box_color)
+    draw_rect(x,                                   y + box_size - CHECKBOX_BORDER_SIZE, box_size,             CHECKBOX_BORDER_SIZE, style_checkbox.box_color)
+    draw_rect(x + box_size - CHECKBOX_BORDER_SIZE, y,                                   CHECKBOX_BORDER_SIZE, box_size,             style_checkbox.box_color)
     if checked^ {
         draw_rect(x + 4, y + 4, box_size - 8, box_size - 8, style_checkbox.box_color)
     }
@@ -833,9 +833,9 @@ checkbox :: proc(label: string, checked: ^bool, loc := #caller_location) -> (cli
 
 // slider //////////////////////////////////////////////////////////////////////
 
-slider_floating :: proc(x, y, w, h: f32, min, max: $T, value: ^T, loc := #caller_location) -> (updated: bool) {
+slider_floating :: proc(x, y, w, h: f32, lower_bound, upper_bound: $T, value: ^T, loc := #caller_location) -> (updated: bool) {
     id := get_id(loc)
-    value_range := cast(f32)(max - min)
+    value_range := cast(f32)(upper_bound - lower_bound)
 
     if global_active_id == 0 || global_active_id == id {
         if rl.CheckCollisionPointRec(global_mouse_position, {x, y, w, h}) {
@@ -846,42 +846,43 @@ slider_floating :: proc(x, y, w, h: f32, min, max: $T, value: ^T, loc := #caller
         }
     }
 
+    // bar + border
+    bw := w
+    bh := style_slider.bar_height + 2*style_slider.border_thickness
+    bx := x
+    by := y + (h - bh)/2
+
+    if style_slider.border_thickness > 0 {
+        draw_rect(bx, by, bw, bh, style_slider.border_color)
+        bx += style_slider.border_thickness
+        by += style_slider.border_thickness
+        bw -= 2*style_slider.border_thickness
+        bh -= 2*style_slider.border_thickness
+    }
+    draw_rect(bx, by, bw, bh, {255, 0, 0, 255})
+    bw -= style_slider.thumb_width
+
     if global_active_id == id {
-        ratio := clamp(global_mouse_position.x - x, 0, w) / w
+        ratio := clamp(global_mouse_position.x - bx, 0, bw) / bw
         new_value := cast(T)(ratio * value_range)
         updated = new_value != value^
         value^ = new_value
     }
 
-    // bar + border
-    bw := w
-    bh := style_slider.bar_height
-    bt := style_slider.border_thickness
-    bx := x
-    by := y + (h - bh)/2
-
-    draw_rect(x, by, w, bh, style_slider.bar_color)
-    if style_slider.border_thickness > 0 {
-        draw_rect(bx,           by,           bw, bt, style_slider.border_color)
-        draw_rect(bx,           by,           bt, bh, style_slider.border_color)
-        draw_rect(bx,           by + bh - bt, bw, bt, style_slider.border_color)
-        draw_rect(bx + bw - bt, by,           bt, bh, style_slider.border_color)
-    }
-
     // thumb
     tw := style_slider.thumb_width
     th := style_slider.thumb_height
-    tx := w * (cast(f32)value^ / value_range)
+    tx := bx + bw * (cast(f32)value^ / value_range)
     ty := y + (h - th)/2
-    draw_rect(x + tx - tw/2, ty, tw, th, style_slider.thumb_color)
+    draw_rect(tx, ty, tw, th, style_slider.thumb_color)
     return
 }
 
-slider :: proc(min, max: $T, value: ^T, w: Maybe(f32) = nil, h: Maybe(f32) = nil, loc := #caller_location) -> (updated: bool) {
+slider :: proc(lower_bound, upper_bound: $T, value: ^T, w: Maybe(f32) = nil, h: Maybe(f32) = nil, loc := #caller_location) -> (updated: bool) {
     layout := get_layout()
-    w := w.? or_else compute_layout_item_width(DEFAULT_SLIDER_WIDTH)
-    h := h.? or_else compute_layout_item_height(style_slider.thumb_height)
-    updated = slider_floating(layout.xoffset, layout.yoffset, w, h, min, max, value, loc)
+    w := w.? or_else compute_layout_item_width(DEFAULT_SLIDER_WIDTH + 2*style_slider.border_thickness)
+    h := h.? or_else compute_layout_item_height(max(style_slider.thumb_height, style_slider.bar_height + 2*style_slider.border_thickness))
+    updated = slider_floating(layout.xoffset, layout.yoffset, w, h, lower_bound, upper_bound, value, loc)
     layout_update(w, h)
     return
 }
