@@ -859,7 +859,7 @@ slider_floating :: proc(x, y, w, h: f32, lower_bound, upper_bound: $T, value: ^T
         bw -= 2*style_slider.border_thickness
         bh -= 2*style_slider.border_thickness
     }
-    draw_rect(bx, by, bw, bh, {255, 0, 0, 255})
+    draw_rect(bx, by, bw, bh, style_slider.bar_color)
     bw -= style_slider.thumb_width
 
     if global_active_id == id {
