@@ -45,7 +45,7 @@ Container :: struct {
     x, y, w, h    : f32,
     zindex        : u8,
     command_index : i32, // used if we need to modify draw commands (when using a background color)
-    scrolloffset  : [2]f32,
+    scroll_offset : [2]f32,
     opts          : Container_Opts,
 }
 
@@ -107,6 +107,7 @@ global_mouse_left_down : bool
 
 global_layout_stack    : [dynamic; LAYOUT_STACK_SIZE]Layout
 global_container_stack : [dynamic; CONTAINER_STACK_SIZE]^Container
+global_clip_stack      : [dynamic; CONTAINER_STACK_SIZE]Rect
 global_id_stack        : [dynamic; ID_STACK_SIZE]int
 
 global_container_map   : map[Id]^Container // TODO: find a way to avoid double hashing
@@ -306,6 +307,10 @@ init_frame :: proc(screen_w, screen_h: f32) {
     clear(&global_container_stack)
     container_push_floating(0, 0, screen_w, screen_h, 0, {})
 
+    // reset the clip satck
+    clear(&global_clip_stack)
+    append(&global_clip_stack, {0, 0, screen_w, screen_h})
+
     // get events (things can change within a frame so we collect at the start)
     global_mouse_position = rl.GetMousePosition()
     global_mouse_left_down = rl.IsMouseButtonDown(.LEFT)
@@ -332,14 +337,29 @@ fini_frame :: proc() {
                 rl_draw_text_ex(cmd.font, cmd.text, {cmd.x, cmd.y}, cmd.font_size, 0, cmd.color)
             case Command_Clip:
                 if cmd.begin {
-                    rl.BeginScissorMode(cast(c.int)cmd.x, cast(c.int)cmd.y, cast(c.int)cmd.w, cast(c.int)cmd.h)
+                    current_clip := global_clip_stack[len(global_clip_stack) - 1]
+                    x, y, w, h := current_clip.x, current_clip.y, current_clip.w, current_clip.h
+                    xl := clamp(cmd.x, x, x + w)
+                    yl := clamp(cmd.y, y, y + h)
+                    xh := clamp(cmd.x + cmd.w, x, x + w)
+                    yh := clamp(cmd.y + cmd.h, y, y + h)
+                    x = xl
+                    y = yl
+                    w = xh - xl
+                    h = yh - yl
+                    append(&global_clip_stack, {x, y, w, h})
+                    rl.BeginScissorMode(cast(i32)x, cast(i32)y, cast(i32)w, cast(i32)h)
                 } else {
                     rl.EndScissorMode()
+                    pop(&global_clip_stack)
+                    clip := global_clip_stack[len(global_clip_stack) - 1]
+                    rl.BeginScissorMode(cast(i32)clip.x, cast(i32)clip.y, cast(i32)clip.w, cast(i32)clip.h)
                 }
             }
         }
         clear(&zqueue)
     }
+    rl.EndScissorMode()
     rl.EndDrawing()
     free_all(context.temp_allocator)
 }
@@ -379,14 +399,16 @@ get_id :: proc(loc: runtime.Source_Code_Location) -> Id {
     return hash.fnv32a(data)
 }
 
-draw_rect :: proc(x, y, w, h: f32, color: rl.Color, corner_radius: f32 = 0, zindex: u8 = get_container().zindex) {
-    draw_queue_push(&global_draw_queue, zindex, Command_Rect{x, y, w, h, corner_radius, color})
+draw_rect :: proc(x, y, w, h: f32, color: rl.Color, corner_radius: f32 = 0) {
+    container := get_container()
+    draw_queue_push(&global_draw_queue, container.zindex, Command_Rect{x, y, w, h, corner_radius, color})
 }
 
-draw_text :: proc(text: string, x, y: f32, color: rl.Color, font: Maybe(rl.Font) = nil, font_size: Maybe(f32) = nil, zindex: u8 = get_container().zindex) {
+draw_text :: proc(text: string, x, y: f32, color: rl.Color, font: Maybe(rl.Font) = nil, font_size: Maybe(f32) = nil) {
+    container := get_container()
     font      := font.?      or_else style_ui.font
     font_size := font_size.? or_else style_ui.font_size
-    draw_queue_push(&global_draw_queue, zindex, Command_Text{text, x, y, font, font_size, color})
+    draw_queue_push(&global_draw_queue, container.zindex, Command_Text{text, x, y, font, font_size, color})
 }
 
 measure_text :: proc(text: string, font: Maybe(rl.Font) = nil, font_size: Maybe(f32) = nil) -> [2]f32 {
@@ -395,12 +417,14 @@ measure_text :: proc(text: string, font: Maybe(rl.Font) = nil, font_size: Maybe(
     return rl_measure_text(font, text, font_size, 0)
 }
 
-begin_clip :: proc(x, y, w, h: f32, zindex: u8 = get_container().zindex) {
-    draw_queue_push(&global_draw_queue, zindex, Command_Clip{x, y, w, h, true})
+begin_clip :: proc(x, y, w, h: f32) {
+    container := get_container()
+    draw_queue_push(&global_draw_queue, container.zindex, Command_Clip{x, y, w, h, true})
 }
 
-end_clip :: proc(zindex: u8 = get_container().zindex) {
-    draw_queue_push(&global_draw_queue, zindex, Command_Clip{})
+end_clip :: proc() {
+    container := get_container()
+    draw_queue_push(&global_draw_queue, container.zindex, Command_Clip{})
 }
 
 draw_base :: proc(x, y, w, h: f32, border_thickness, corner_radius: f32, color, border_color: rl.Color, padding: Padding) -> (nx, ny, nw, nh: f32) {
@@ -649,19 +673,18 @@ container_push_floating :: proc(x, y, w, h: f32, id: Id, zindex := u8(0), paddin
     }
     container.command_index = cast(i32)len(global_draw_queue.zqueues[zindex])
 
-    layout_push_floating(.Column, x, y, padding = padding)
+    layout_push_floating(.Column, x - container.scroll_offset.x, y - container.scroll_offset.y, padding = padding)
     append(&global_container_stack, container)
-    begin_clip(x, y, w, h)
+    begin_clip(container.x, container.y, container.w, container.h)
 }
 
 container_pop_floating :: proc() -> (w, h: f32) {
+    layout := get_layout()
     w, h = layout_pop_floating()
 
     container := get_container()
     cmd       := &global_draw_queue.zqueues[container.zindex][container.command_index].(Command_Clip)
 
-    // we update the scissor area with the proper size of the container is
-    // resizable (no change on fixed sizes)
     if container.w <= 0 do cmd.w = w
     if container.h <= 0 do cmd.h = h
 
@@ -714,8 +737,8 @@ pane_end :: proc() {
     // bottom border
     cmd_b_b := &global_draw_queue.zqueues[container.zindex][container.command_index + 5].(Command_Rect)
     cmd_b_b.w = w
-    layout.yoffset += cmd_b_r.h
-    layout.h += cmd_b_r.h
+    layout.yoffset += cmd_b_b.h
+    layout.h += cmd_b_b.h
 
     container_pop()
 }
@@ -735,13 +758,14 @@ pane :: proc(
     container_push(id, padding)
     layout := get_layout()
 
-    //background
-    draw_rect(layout.x, layout.y, 0, 0, bg_color)
+    container := get_container()
+    container.scroll_offset.y += 10 * rl.GetMouseWheelMoveV().y
 
-    draw_rect(layout.x, layout.y, border_thickness.l, 0, border_color.l)
-    draw_rect(layout.x, layout.y, border_thickness.r, 0, border_color.r)
-    draw_rect(layout.x, layout.y, 0, border_thickness.t, border_color.t)
-    draw_rect(layout.x, layout.y, 0, border_thickness.b, border_color.b)
+    draw_rect(container.x, container.y, 0, 0, bg_color)
+    draw_rect(container.x, container.y, border_thickness.l, 0, border_color.l)
+    draw_rect(container.x, container.y, border_thickness.r, 0, border_color.r)
+    draw_rect(container.x, container.y, 0, border_thickness.t, border_color.t)
+    draw_rect(container.x, container.y, 0, border_thickness.b, border_color.b)
 
     layout.w += border_thickness.l
     layout.h += border_thickness.t
