@@ -67,8 +67,8 @@ main :: proc() {
                 if ui.box(200, 200) {
                     layout := ui.get_layout()
                     x, y := layout.xoffset, layout.yoffset
-                    ui.draw_rect(x, y, 200, 200, {255, 0, 0, 255})
                     ui.draw_rect(x + 1, y + 1, 198, 198, {0, 255, 0, 255})
+                    ui.draw_rect(x, y, 200, 200, {255, 0, 0, 255})
                 }
 
                 if ui.column(100, item_spacing = 4) {
