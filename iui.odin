@@ -1,4 +1,4 @@
-package ui
+package iui
 
 // Design choice:
 // - we don't store component data:

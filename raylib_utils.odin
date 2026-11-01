@@ -1,4 +1,4 @@
-package ui
+package iui
 
 import "core:c"
 import "core:strings"
