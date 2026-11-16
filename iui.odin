@@ -47,8 +47,8 @@ Container_Opts :: bit_set[Container_Opt]
 
 Container :: struct {
     x, y, w, h           : f32,
-    content_w, content_h : f32,
     zindex               : u8,
+    content_w, content_h : f32,
     scroll_offset        : [2]f32,
     opts                 : Container_Opts,
 }
@@ -58,7 +58,7 @@ Layout :: struct {
     mode          : Layout_Mode,
     xoffset       : f32,
     yoffset       : f32,
-    x, y, w, h    : f32,
+    w, h          : f32,
     padding       : Padding,
     item_spacing  : f32,
     item_sizes    : []f32,
@@ -99,9 +99,10 @@ draw_stack_push :: proc(queue: ^Draw_Stack, zindex: u8, command: Draw_Command) {
 
 // globals /////////////////////////////////////////////////////////////////////
 
-global_hot_id     : Id
-global_active_id  : Id
-global_focus_flag : bool
+global_hot_id           : Id
+global_active_id        : Id
+global_focus_flag       : bool
+global_hot_container_id : Id
 
 global_draw_stack        : Draw_Stack
 global_measure_text_proc : Measure_Text_Proc
@@ -305,12 +306,19 @@ fini :: proc() {
 }
 
 init_frame :: proc(screen_w, screen_h: f32) {
+    container := get_container(0)
     global_hot_id = 0
 
-    // reset container stack
-    clear(&global_layout_stack)
+    container.x = 0
+    container.y = 0
+    container.w = screen_w
+    container.h = screen_h
+
+    // reset container & layout stack
     clear(&global_container_stack)
-    container_push_floating(0, 0, 0, screen_w, screen_h, {})
+    append(&global_container_stack, container)
+    clear(&global_layout_stack)
+    append(&global_layout_stack, {})
 
     // reset the clip satck
     clear(&global_clip_stack)
@@ -471,8 +479,6 @@ layout_push_floating :: proc(
         mode         = mode,
         xoffset      = x + padding.l,
         yoffset      = y + padding.t,
-        x            = x,
-        y            = y,
         padding      = padding,
         item_spacing = item_spacing,
         item_sizes   = item_sizes,
@@ -656,6 +662,11 @@ get_container_from_id :: proc(id: Id) -> ^Container {
 
 get_container :: proc{get_current_container, get_container_from_id}
 
+get_window_size :: proc() -> (w, h: f32) {
+    main_container := global_container_stack[0]
+    return main_container.w, main_container.h
+}
+
 container_push_floating :: proc(
     id: Id,
     x, y, w, h: f32,
@@ -670,11 +681,12 @@ container_push_floating :: proc(
         container.y = y
         container.zindex = zindex
     }
+    ww, wh := get_window_size()
     if .Resizable_W not_in container.opts {
-        container.w = w
+        container.w = min(ww - x, w)
     }
     if .Resizable_H not_in container.opts {
-        container.h = h
+        container.h = min(wh - y, h)
     }
     container.opts = opts
 
@@ -690,11 +702,12 @@ container_pop_floating :: proc() -> ^Container {
 
     container.content_w = layout.w
     container.content_h = layout.h
+    ww, wh := get_window_size()
     if container.w <= 0 && .Resizable_W not_in container.opts {
-        container.w = container.content_w
+        container.w = min(ww - container.x, container.content_w)
     }
     if container.h <= 0 && .Resizable_H not_in container.opts {
-        container.h = container.content_h
+        container.h = min(wh - container.y, container.content_h)
     }
 
     begin_clip(container.x, container.y, container.w, container.h)
@@ -731,6 +744,8 @@ pane_end :: proc(
     opts            : Container_Opts = {},
     loc := #caller_location,
 ) {
+    id := get_id(loc)
+
     // update border to layout
     layout := get_layout()
     layout.w += border_thickness.r
@@ -746,15 +761,18 @@ pane_end :: proc(
     draw_rect(container.x, container.y, container.w, border_thickness.b, border_color.b)
     draw_rect(container.x, container.y, container.w, container.h, bg_color)
 
-    // we handle the scrolling when we know the size of the content (offset will be effective at the next frame)
-    if container.content_w > container.w {
-        container.scroll_offset.x += 10 * rl.GetMouseWheelMoveV().x
-        container.scroll_offset.x = clamp(container.scroll_offset.x, -(container.content_w - container.w), 0)
-    }
+    if is_region_hovered(container.x, container.y, container.w, container.h) {
+        global_hot_container_id = id
+        // we handle the scrolling when we know the size of the content (offset will be effective at the next frame)
+        if container.content_w > container.w {
+            container.scroll_offset.x += 10 * rl.GetMouseWheelMoveV().x
+            container.scroll_offset.x = clamp(container.scroll_offset.x, -(container.content_w - container.w), 0)
+        }
 
-    if container.content_h > container.h {
-        container.scroll_offset.y += 10 * rl.GetMouseWheelMoveV().y
-        container.scroll_offset.y = clamp(container.scroll_offset.y, -(container.content_h - container.h), 0)
+        if container.content_h > container.h {
+            container.scroll_offset.y += 10 * rl.GetMouseWheelMoveV().y
+            container.scroll_offset.y = clamp(container.scroll_offset.y, -(container.content_h - container.h), 0)
+        }
     }
 }
 
@@ -793,12 +811,14 @@ pane :: proc(
 
 // component utility functions /////////////////////////////////////////////////
 
-point_in_region :: proc(x, y: f32, clip: Rect) -> bool {
-    xb := clip.x
-    xe := clip.x + clip.w
-    yb := clip.y
-    ye := clip.y + clip.h
-    return (xb <= x && x < xe) && (yb <= y && y < ye)
+is_region_hovered :: proc(x, y, w, h: f32) -> bool {
+    xb := x
+    xe := x + w
+    yb := y
+    ye := y + h
+    mx := global_mouse_position.x
+    my := global_mouse_position.y
+    return (xb <= mx && mx < xe) && (yb <= my && my < ye)
 }
 
 //
@@ -806,7 +826,7 @@ point_in_region :: proc(x, y: f32, clip: Rect) -> bool {
 //
 is_component_clicked :: proc(id: Id, x, y, w, h: f32) -> (clicked: bool) {
     if global_active_id == 0 || global_active_id == id {
-        if point_in_region(global_mouse_position.x, global_mouse_position.y, {x, y, w, h}) {
+        if is_region_hovered(x, y, w, h) {
             global_hot_id = id
         }
         if global_mouse_left_down {

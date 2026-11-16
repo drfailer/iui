@@ -16,6 +16,15 @@ main :: proc() {
     defer strings.builder_destroy(&input_builder)
     strings.write_string(&input_builder, "default text")
 
+	// VSYNC_HINT               = 6,     // Set to try enabling V-Sync on GPU
+	// FULLSCREEN_MODE          = 1,     // Set to run program in fullscreen
+	// WINDOW_RESIZABLE         = 2,     // Set to allow resizable window
+	// WINDOW_UNDECORATED       = 3,     // Set to disable window decoration (frame and buttons)
+	// WINDOW_TRANSPARENT       = 4,     // Set to allow transparent framebuffer
+	// BORDERLESS_WINDOWED_MODE = 15,    // Set to run program in borderless windowed mode
+	// MSAA_4X_HINT             = 5,     // Set to try enabling MSAA 4X
+    rl.SetConfigFlags({ .WINDOW_RESIZABLE })
+
     rl.InitWindow(800, 600, "Playground")
     defer rl.CloseWindow()
 
@@ -32,7 +41,7 @@ main :: proc() {
         iui.init_frame(cast(f32)rl.GetScreenWidth(), cast(f32)rl.GetScreenHeight())
 
         iui.text("some text")
-        if iui.pane(h = 100, bg_color = {0, 0, 255, 255}, padding = {10, 10, 10, 10}) {
+        if iui.pane(bg_color = {0, 0, 255, 255}, padding = {10, 10, 10, 10}) {
             if iui.row(padding = {4, 4, 4, 4}, item_widths = {150, 0}, item_spacing = 10) {
 
                 @(static) buttons_header_status: bool
