@@ -38,15 +38,19 @@ Rect :: struct { x, y, w, h: f32 }
 Padding :: struct { l, r, t, b: f32 }
 Border_Data :: struct($T: typeid) { l, r, t, b: T }
 
-Container_Opt :: enum { Resizable, Moveable }
+Container_Opt :: enum {
+    Resizable_W,
+    Resizable_H,
+    Moveable,
+}
 Container_Opts :: bit_set[Container_Opt]
 
 Container :: struct {
-    x, y, w, h    : f32,
-    zindex        : u8,
-    command_index : i32, // used if we need to modify draw commands (when using a background color)
-    scroll_offset : [2]f32,
-    opts          : Container_Opts,
+    x, y, w, h           : f32,
+    content_w, content_h : f32,
+    zindex               : u8,
+    scroll_offset        : [2]f32,
+    opts                 : Container_Opts,
 }
 
 Layout_Mode :: enum { Column, Row }
@@ -306,7 +310,7 @@ init_frame :: proc(screen_w, screen_h: f32) {
     // reset container stack
     clear(&global_layout_stack)
     clear(&global_container_stack)
-    container_push_floating(0, 0, screen_w, screen_h, 0, {})
+    container_push_floating(0, 0, 0, screen_w, screen_h, {})
 
     // reset the clip satck
     clear(&global_clip_stack)
@@ -633,6 +637,8 @@ box :: proc(w, h: f32) -> bool {
     return true
 }
 
+// TODO: box with draw callback
+
 // container ////////////////////////////////////////////////////////////////////
 
 get_current_container :: proc() -> ^Container {
@@ -650,7 +656,13 @@ get_container_from_id :: proc(id: Id) -> ^Container {
 
 get_container :: proc{get_current_container, get_container_from_id}
 
-container_push_floating :: proc(x, y, w, h: f32, id: Id, zindex := u8(0), padding := Padding{}) {
+container_push_floating :: proc(
+    id: Id,
+    x, y, w, h: f32,
+    zindex := u8(0),
+    padding := Padding{},
+    opts := Container_Opts{},
+) -> ^Container {
     container := get_container(id)
 
     if .Moveable not_in container.opts {
@@ -658,24 +670,31 @@ container_push_floating :: proc(x, y, w, h: f32, id: Id, zindex := u8(0), paddin
         container.y = y
         container.zindex = zindex
     }
-    if .Resizable not_in container.opts {
+    if .Resizable_W not_in container.opts {
         container.w = w
+    }
+    if .Resizable_H not_in container.opts {
         container.h = h
     }
-    container.command_index = cast(i32)len(global_draw_stack.zqueues[zindex])
+    container.opts = opts
 
     layout_push_floating(.Column, x + container.scroll_offset.x, y + container.scroll_offset.y, padding = padding)
     append(&global_container_stack, container)
     end_clip()
+    return container
 }
 
 container_pop_floating :: proc() -> ^Container {
     layout    := layout_pop_floating()
     container := get_container()
 
-    if .Resizable not_in container.opts {
-        container.w = layout.w
-        container.h = layout.h
+    container.content_w = layout.w
+    container.content_h = layout.h
+    if container.w <= 0 && .Resizable_W not_in container.opts {
+        container.w = container.content_w
+    }
+    if container.h <= 0 && .Resizable_H not_in container.opts {
+        container.h = container.content_h
     }
 
     begin_clip(container.x, container.y, container.w, container.h)
@@ -684,9 +703,9 @@ container_pop_floating :: proc() -> ^Container {
     return container
 }
 
-container_push :: proc(id: Id, padding := Padding{}) {
+container_push :: proc(id: Id, w, h: f32, padding := Padding{}, opts := Container_Opts{}) -> ^Container {
     layout := get_layout()
-    container_push_floating(layout.xoffset, layout.yoffset, 0, 0, id, 0, padding)
+    return container_push_floating(id, layout.xoffset, layout.yoffset, w, h, 0, padding, opts)
 }
 
 container_pop :: proc() -> ^Container {
@@ -703,10 +722,13 @@ container_pop :: proc() -> ^Container {
 //
 
 pane_end :: proc(
+    w               : Maybe(f32) = nil,
+    h               : Maybe(f32) = nil,
     bg_color        : rl.Color = {},
     border_color    : Border_Data(rl.Color) = {},
     border_thickness: Border_Data(f32) = {},
     padding         : Padding = {},
+    opts            : Container_Opts = {},
     loc := #caller_location,
 ) {
     // update border to layout
@@ -723,23 +745,35 @@ pane_end :: proc(
     draw_rect(container.x, container.y, container.w, border_thickness.t, border_color.t)
     draw_rect(container.x, container.y, container.w, border_thickness.b, border_color.b)
     draw_rect(container.x, container.y, container.w, container.h, bg_color)
+
+    // we handle the scrolling when we know the size of the content (offset will be effective at the next frame)
+    if container.content_w > container.w {
+        container.scroll_offset.x += 10 * rl.GetMouseWheelMoveV().x
+        container.scroll_offset.x = clamp(container.scroll_offset.x, -(container.content_w - container.w), 0)
+    }
+
+    if container.content_h > container.h {
+        container.scroll_offset.y += 10 * rl.GetMouseWheelMoveV().y
+        container.scroll_offset.y = clamp(container.scroll_offset.y, -(container.content_h - container.h), 0)
+    }
 }
 
 // TODO: this could be resizable?
 
 @(deferred_in=pane_end)
 pane :: proc(
+    w               : Maybe(f32) = nil,
+    h               : Maybe(f32) = nil,
     bg_color        : rl.Color = {},
     border_color    : Border_Data(rl.Color) = {},
     border_thickness: Border_Data(f32) = {},
     padding         : Padding = {},
+    opts            : Container_Opts = {},
     loc := #caller_location,
 ) -> bool {
     id := get_id(loc)
 
-    container_push(id, padding)
-    container := get_container()
-    container.scroll_offset.y += 10 * rl.GetMouseWheelMoveV().y
+    container := container_push(id, w.? or_else 0, h.? or_else 0, padding, opts)
 
     layout := get_layout()
     layout.w += border_thickness.l
@@ -960,7 +994,7 @@ header :: proc(label: string, opened: ^bool, level := 0, w: Maybe(f32) = nil, lo
     height      := compute_layout_item_height(max(label_size.y, symbol_size.y) + style.padding.t + style.padding.b + 2*style.border_thickness)
     x, y, w, h  := layout.xoffset, layout.yoffset, width, height
 
-    container_push(id)
+    container := container_push(id, 0, 0)
 
     // update globals
     if is_component_clicked(id, x, y, w, h) {

@@ -32,7 +32,7 @@ main :: proc() {
         iui.init_frame(cast(f32)rl.GetScreenWidth(), cast(f32)rl.GetScreenHeight())
 
         iui.text("some text")
-        if iui.pane({0, 0, 255, 255}, padding = {10, 10, 10, 10}) {
+        if iui.pane(h = 100, bg_color = {0, 0, 255, 255}, padding = {10, 10, 10, 10}) {
             if iui.row(padding = {4, 4, 4, 4}, item_widths = {150, 0}, item_spacing = 10) {
 
                 @(static) buttons_header_status: bool
