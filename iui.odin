@@ -29,6 +29,10 @@ ID_STACK_SIZE        :: #config(UI_ID_STACK_SIZE, 32)
 EDIT_UNDO_STATE_SCRATCH_CAPACITY :: #config(UI_EDIT_UNDO_STATE_SCRATCH_CAPACITY, 1024)
 EDIT_UNDO_TEXT_SCRATCH_CAPACITY  :: #config(UI_EDIT_UNDO_TEXT_SCRATCH_CAPACITY,  1024)
 
+FIT_CONTENT_WIDTH  :: 0
+FIT_CONTENT_HEIGHT :: 0
+FIT_CONTENT_SIZE   :: 0
+
 // types ///////////////////////////////////////////////////////////////////////
 
 Id :: #type u32
@@ -551,7 +555,7 @@ get_layout_item_size :: proc() -> (size: Maybe(f32)) {
     } else if len(layout.item_sizes) > 0 {
         size = layout.item_sizes[len(layout.item_sizes) - 1]
     }
-    if value, ok := size.?; ok && value <= 0 {
+    if value, ok := size.?; ok && value == FIT_CONTENT_SIZE {
         return nil
     }
     return size
@@ -560,7 +564,7 @@ get_layout_item_size :: proc() -> (size: Maybe(f32)) {
 compute_layout_item_width :: proc(w: f32) -> f32 {
     layout := get_layout()
     if layout.mode == .Column {
-        return w if layout.size <= 0 else layout.size
+        return w if layout.size == FIT_CONTENT_WIDTH else layout.size
     }
     return get_layout_item_size().? or_else w
 }
@@ -568,7 +572,7 @@ compute_layout_item_width :: proc(w: f32) -> f32 {
 compute_layout_item_height :: proc(h: f32) -> f32 {
     layout := get_layout()
     if layout.mode == .Row {
-        return h if layout.size <= 0 else layout.size
+        return h if layout.size == FIT_CONTENT_HEIGHT else layout.size
     }
     return get_layout_item_size().? or_else h
 }
@@ -592,7 +596,7 @@ compute_layout_item_height :: proc(h: f32) -> f32 {
 //
 
 @(deferred_none=layout_pop)
-column :: proc(w: f32 = 0, item_heights := []f32{}, padding: Padding = {}, item_spacing: f32 = 0) -> bool {
+column :: proc(w: f32 = FIT_CONTENT_WIDTH, item_heights := []f32{}, padding: Padding = {}, item_spacing: f32 = 0) -> bool {
     size := w
 
     // when the size is unspecified, we try to deduce it from the parent
@@ -601,7 +605,7 @@ column :: proc(w: f32 = 0, item_heights := []f32{}, padding: Padding = {}, item_
         if parent_layout.mode == .Column {
             size = parent_layout.size
         } else {
-            size = get_layout_item_size().? or_else 0
+            size = get_layout_item_size().? or_else FIT_CONTENT_WIDTH
         }
     }
     layout_push(.Column, item_sizes = item_heights, size = size, padding = padding, item_spacing = item_spacing)
@@ -609,7 +613,7 @@ column :: proc(w: f32 = 0, item_heights := []f32{}, padding: Padding = {}, item_
 }
 
 @(deferred_none=layout_pop)
-row :: proc(h: f32 = 0, item_widths := []f32{}, padding: Padding = {}, item_spacing: f32 = 0) -> bool {
+row :: proc(h: f32 = FIT_CONTENT_HEIGHT, item_widths := []f32{}, padding: Padding = {}, item_spacing: f32 = 0) -> bool {
     size := h
 
     // when the size is unspecified, we try to deduce it from the parent
@@ -618,7 +622,7 @@ row :: proc(h: f32 = 0, item_widths := []f32{}, padding: Padding = {}, item_spac
         if parent_layout.mode == .Row {
             size = parent_layout.size
         } else {
-            size = get_layout_item_size().? or_else 0
+            size = get_layout_item_size().? or_else FIT_CONTENT_HEIGHT
         }
     }
 
@@ -645,7 +649,7 @@ box :: proc(w, h: f32) -> bool {
 
 // TODO: box with draw callback
 
-// container ////////////////////////////////////////////////////////////////////
+// container ///////////////////////////////////////////////////////////////////
 
 get_current_container :: proc() -> ^Container {
     return global_container_stack[len(global_container_stack) - 1]
@@ -703,10 +707,10 @@ container_pop_floating :: proc() -> ^Container {
     container.content_w = layout.w
     container.content_h = layout.h
     ww, wh := get_window_size()
-    if container.w <= 0 && .Resizable_W not_in container.opts {
+    if container.w == FIT_CONTENT_WIDTH && .Resizable_W not_in container.opts {
         container.w = min(ww - container.x, container.content_w)
     }
-    if container.h <= 0 && .Resizable_H not_in container.opts {
+    if container.h == FIT_CONTENT_HEIGHT && .Resizable_H not_in container.opts {
         container.h = min(wh - container.y, container.content_h)
     }
 
@@ -735,8 +739,8 @@ container_pop :: proc() -> ^Container {
 //
 
 pane_end :: proc(
-    w               : Maybe(f32) = nil,
-    h               : Maybe(f32) = nil,
+    w               : f32 = FIT_CONTENT_WIDTH,
+    h               : f32 = FIT_CONTENT_HEIGHT,
     bg_color        : rl.Color = {},
     border_color    : Border_Data(rl.Color) = {},
     border_thickness: Border_Data(f32) = {},
@@ -780,8 +784,8 @@ pane_end :: proc(
 
 @(deferred_in=pane_end)
 pane :: proc(
-    w               : Maybe(f32) = nil,
-    h               : Maybe(f32) = nil,
+    w               : f32 = FIT_CONTENT_WIDTH,
+    h               : f32 = FIT_CONTENT_HEIGHT,
     bg_color        : rl.Color = {},
     border_color    : Border_Data(rl.Color) = {},
     border_thickness: Border_Data(f32) = {},
@@ -791,7 +795,7 @@ pane :: proc(
 ) -> bool {
     id := get_id(loc)
 
-    container := container_push(id, w.? or_else 0, h.? or_else 0, padding, opts)
+    container := container_push(id, w, h, padding, opts)
 
     layout := get_layout()
     layout.w += border_thickness.l
