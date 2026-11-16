@@ -312,6 +312,7 @@ fini :: proc() {
 init_frame :: proc(screen_w, screen_h: f32) {
     container := get_container(0)
     global_hot_id = 0
+    global_hot_container_id = 0
 
     container.x = 0
     container.y = 0
@@ -765,18 +766,25 @@ pane_end :: proc(
     draw_rect(container.x, container.y, container.w, border_thickness.b, border_color.b)
     draw_rect(container.x, container.y, container.w, container.h, bg_color)
 
-    if is_region_hovered(container.x, container.y, container.w, container.h) {
+    if global_hot_container_id == 0 && is_region_hovered(container.x, container.y, container.w, container.h) {
         global_hot_container_id = id
         // we handle the scrolling when we know the size of the content (offset will be effective at the next frame)
         if container.content_w > container.w {
             container.scroll_offset.x += 10 * rl.GetMouseWheelMoveV().x
-            container.scroll_offset.x = clamp(container.scroll_offset.x, -(container.content_w - container.w), 0)
         }
 
         if container.content_h > container.h {
             container.scroll_offset.y += 10 * rl.GetMouseWheelMoveV().y
-            container.scroll_offset.y = clamp(container.scroll_offset.y, -(container.content_h - container.h), 0)
         }
+    }
+    // TODO: find a way to avoid doing this all the time
+    update_x_scroll_offset: {
+        max_scroll_offset := container.content_w - container.w
+        container.scroll_offset.x = clamp(container.scroll_offset.x, -max_scroll_offset, 0)
+    }
+    update_y_scroll_offset: {
+        max_scroll_offset := container.content_h - container.h
+        container.scroll_offset.y = clamp(container.scroll_offset.y, -max_scroll_offset, 0)
     }
 }
 
