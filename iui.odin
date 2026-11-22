@@ -1068,7 +1068,7 @@ slider :: proc(lower_bound, upper_bound: $T, value: ^T, w: Maybe(f32) = nil, h: 
 // header //////////////////////////////////////////////////////////////////////
 
 header_end :: proc() {
-    container_pop()
+    layout_pop()
 }
 
 @(deferred_none=header_end)
@@ -1084,7 +1084,7 @@ header :: proc(label: string, opened: ^bool, level := 0, w: Maybe(f32) = nil, lo
     height      := compute_layout_item_height(max(label_size.y, symbol_size.y) + style.padding.t + style.padding.b + 2*style.border_thickness)
     x, y, w, h  := layout.xoffset, layout.yoffset, width, height
 
-    container := container_push(id, 0, 0)
+    layout_push(.Column);
 
     // update globals
     if is_component_clicked(id, x, y, w, h) {
