@@ -285,6 +285,25 @@ style_text_input := Text_Input_Style{
 TEXT_INPUT_CARET_SIZE :: 2
 TEXT_INPUT_BORDER_THICKNESS :: 1
 
+// Scrollbar ///////////////////////////////////
+
+Scrollbar_Style :: struct {
+    size                : f32,
+    thumb_idle_color    : rl.Color,
+    thumb_hovered_color : rl.Color,
+    thumb_clicked_color : rl.Color,
+    track_color         : rl.Color,
+}
+
+style_scrollbar := Scrollbar_Style{
+    size                = 10,
+    thumb_idle_color    = rl.Color{255, 255, 255, 255},
+    thumb_hovered_color = rl.Color{40, 40, 40, 255},
+    thumb_clicked_color = rl.Color{20, 20, 20, 255},
+    track_color         = rl.Color{0, 0, 0, 255},
+}
+SCROLLBAR_MIN_THUMB_SIZE :: 5
+
 // init / fini /////////////////////////////////////////////////////////////////
 
 init :: proc() {
@@ -312,7 +331,20 @@ fini :: proc() {
 init_frame :: proc(screen_w, screen_h: f32) {
     container := get_container(0)
     global_hot_id = 0
+
     global_hot_container_id = 0
+    hot_container_z_index : u8 = 0
+    hot_container: ^Container = container
+    for id, container in global_container_map {
+        if is_region_hovered(container.x, container.y, container.w, container.h) && container.zindex >= hot_container_z_index {
+            // sub-containers have the priority
+            if container.w <= hot_container.w && container.h <= hot_container.h {
+                global_hot_container_id = id
+                hot_container = container
+            }
+        }
+    }
+    fmt.println(global_hot_container_id)
 
     container.x = 0
     container.y = 0
@@ -760,14 +792,34 @@ pane_end :: proc(
 
     container := container_pop()
 
-    draw_rect(container.x, container.y, border_thickness.l, container.h, border_color.l)
-    draw_rect(container.x, container.y, border_thickness.r, container.h, border_color.r)
-    draw_rect(container.x, container.y, container.w, border_thickness.t, border_color.t)
-    draw_rect(container.x, container.y, container.w, border_thickness.b, border_color.b)
-    draw_rect(container.x, container.y, container.w, container.h, bg_color)
+    has_horizontal_scrollbar := container.content_w > container.w
+    has_vertical_scrollbar := container.content_h > container.h
 
-    if global_hot_container_id == 0 && is_region_hovered(container.x, container.y, container.w, container.h) {
-        global_hot_container_id = id
+    // vertical
+    if has_vertical_scrollbar {
+        sb_x := container.x + container.w - style_scrollbar.size
+        sb_y := container.y
+        sb_w := style_scrollbar.size
+        sb_h := container.h if !has_horizontal_scrollbar else container.h - style_scrollbar.size
+        draw_rect(sb_x, sb_y, sb_w, sb_h, style_scrollbar.track_color)
+
+        thumb_size  := max(SCROLLBAR_MIN_THUMB_SIZE, container.h*sb_h/container.content_h)
+        draw_rect(sb_x, sb_y, style_scrollbar.size, thumb_size, style_scrollbar.thumb_idle_color)
+    }
+
+    // horizontal
+    if has_horizontal_scrollbar {
+        sb_x := container.x
+        sb_y := container.y + container.h - style_scrollbar.size
+        sb_w := container.w if !has_vertical_scrollbar else container.w - style_scrollbar.size
+        sb_h := style_scrollbar.size
+        draw_rect(sb_x, sb_y, sb_w, sb_h, style_scrollbar.track_color)
+
+        thumb_size  := max(SCROLLBAR_MIN_THUMB_SIZE, container.w*sb_w/container.content_w)
+        draw_rect(sb_x, sb_y, thumb_size, style_scrollbar.size, style_scrollbar.thumb_idle_color)
+    }
+
+    if global_hot_container_id == id {
         // we handle the scrolling when we know the size of the content (offset will be effective at the next frame)
         if container.content_w > container.w {
             container.scroll_offset.x += 10 * rl.GetMouseWheelMoveV().x
@@ -786,6 +838,12 @@ pane_end :: proc(
         max_scroll_offset := container.content_h - container.h
         container.scroll_offset.y = clamp(container.scroll_offset.y, -max_scroll_offset, 0)
     }
+
+    draw_rect(container.x, container.y, border_thickness.l, container.h, border_color.l)
+    draw_rect(container.x, container.y, border_thickness.r, container.h, border_color.r)
+    draw_rect(container.x, container.y, container.w, border_thickness.t, border_color.t)
+    draw_rect(container.x, container.y, container.w, border_thickness.b, border_color.b)
+    draw_rect(container.x, container.y, container.w, container.h, bg_color)
 }
 
 // TODO: this could be resizable?
