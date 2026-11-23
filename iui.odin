@@ -46,6 +46,7 @@ Container_Opt :: enum {
     Resizable_W,
     Resizable_H,
     Moveable,
+    // TODO: scrollable?
 }
 Container_Opts :: bit_set[Container_Opt]
 
@@ -112,6 +113,7 @@ global_draw_stack        : Draw_Stack
 global_measure_text_proc : Measure_Text_Proc
 
 global_mouse_position  : [2]f32
+global_mouse_motion    : [2]f32
 global_mouse_left_down : bool
 
 global_layout_stack    : [dynamic; LAYOUT_STACK_SIZE]Layout
@@ -297,9 +299,9 @@ Scrollbar_Style :: struct {
 
 style_scrollbar := Scrollbar_Style{
     size                = 10,
-    thumb_idle_color    = rl.Color{255, 255, 255, 255},
-    thumb_hovered_color = rl.Color{40, 40, 40, 255},
-    thumb_clicked_color = rl.Color{20, 20, 20, 255},
+    thumb_idle_color    = rl.Color{40, 40, 40, 255},
+    thumb_hovered_color = rl.Color{60, 60, 60, 255},
+    thumb_clicked_color = rl.Color{30, 30, 30, 255},
     track_color         = rl.Color{0, 0, 0, 255},
 }
 SCROLLBAR_MIN_THUMB_SIZE :: 5
@@ -344,7 +346,6 @@ init_frame :: proc(screen_w, screen_h: f32) {
             }
         }
     }
-    fmt.println(global_hot_container_id)
 
     container.x = 0
     container.y = 0
@@ -362,6 +363,7 @@ init_frame :: proc(screen_w, screen_h: f32) {
     append(&global_clip_stack, {0, 0, screen_w, screen_h})
 
     // get events (things can change within a frame so we collect at the start)
+    global_mouse_motion = rl.GetMousePosition() - global_mouse_position
     global_mouse_position = rl.GetMousePosition()
     global_mouse_left_down = rl.IsMouseButtonDown(.LEFT)
 
@@ -767,8 +769,8 @@ container_pop :: proc() -> ^Container {
 // pane ////////////////////////////////////////////////////////////////////////
 
 //
-// The pane is purely a style component that allow to change the background
-// color behind other components (it doesn't support any interaction).
+// Panes are the base of grouped components: they allow to change the
+// background color, handle scrolling, ...
 //
 
 pane_end :: proc(
@@ -792,52 +794,7 @@ pane_end :: proc(
 
     container := container_pop()
 
-    has_horizontal_scrollbar := container.content_w > container.w
-    has_vertical_scrollbar := container.content_h > container.h
-
-    // vertical
-    if has_vertical_scrollbar {
-        sb_x := container.x + container.w - style_scrollbar.size
-        sb_y := container.y
-        sb_w := style_scrollbar.size
-        sb_h := container.h if !has_horizontal_scrollbar else container.h - style_scrollbar.size
-        draw_rect(sb_x, sb_y, sb_w, sb_h, style_scrollbar.track_color)
-
-        thumb_size  := max(SCROLLBAR_MIN_THUMB_SIZE, container.h*sb_h/container.content_h)
-        draw_rect(sb_x, sb_y, style_scrollbar.size, thumb_size, style_scrollbar.thumb_idle_color)
-    }
-
-    // horizontal
-    if has_horizontal_scrollbar {
-        sb_x := container.x
-        sb_y := container.y + container.h - style_scrollbar.size
-        sb_w := container.w if !has_vertical_scrollbar else container.w - style_scrollbar.size
-        sb_h := style_scrollbar.size
-        draw_rect(sb_x, sb_y, sb_w, sb_h, style_scrollbar.track_color)
-
-        thumb_size  := max(SCROLLBAR_MIN_THUMB_SIZE, container.w*sb_w/container.content_w)
-        draw_rect(sb_x, sb_y, thumb_size, style_scrollbar.size, style_scrollbar.thumb_idle_color)
-    }
-
-    if global_hot_container_id == id {
-        // we handle the scrolling when we know the size of the content (offset will be effective at the next frame)
-        if container.content_w > container.w {
-            container.scroll_offset.x += 10 * rl.GetMouseWheelMoveV().x
-        }
-
-        if container.content_h > container.h {
-            container.scroll_offset.y += 10 * rl.GetMouseWheelMoveV().y
-        }
-    }
-    // TODO: find a way to avoid doing this all the time
-    update_x_scroll_offset: {
-        max_scroll_offset := container.content_w - container.w
-        container.scroll_offset.x = clamp(container.scroll_offset.x, -max_scroll_offset, 0)
-    }
-    update_y_scroll_offset: {
-        max_scroll_offset := container.content_h - container.h
-        container.scroll_offset.y = clamp(container.scroll_offset.y, -max_scroll_offset, 0)
-    }
+    scrollbars(id, container.x, container.y, container.w, container.h, container.content_w, container.content_h, &container.scroll_offset, global_hot_container_id == id)
 
     draw_rect(container.x, container.y, border_thickness.l, container.h, border_color.l)
     draw_rect(container.x, container.y, border_thickness.r, container.h, border_color.r)
@@ -847,6 +804,7 @@ pane_end :: proc(
 }
 
 // TODO: this could be resizable?
+// TODO: we should be able to configure the column layout through the pane arguments
 
 @(deferred_in=pane_end)
 pane :: proc(
@@ -878,6 +836,8 @@ pane :: proc(
 // window //////////////////////////////////////////////////////////////////////
 
 // TODO: popup and dragable windows?
+// TODO: the window should be a pane + a window header (the pane will
+//       handle the resize, the header will handle the window drag)
 
 // component utility functions /////////////////////////////////////////////////
 
@@ -1254,4 +1214,64 @@ text_input :: proc(builder: ^strings.Builder, w: Maybe(f32) = nil, h: Maybe(f32)
     submitted = text_input_floating(layout.xoffset, layout.yoffset, w, h, builder, style, loc)
     layout_update(w, h)
     return
+}
+
+// scrollbars //////////////////////////////////////////////////////////////////
+
+scrollbars :: proc(id: Id, x, y, w, h, content_w, content_h: f32, scroll_offset: ^[2]f32, hot: bool) {
+    has_horizontal_scrollbar := content_w > w
+    has_vertical_scrollbar := content_h > h
+    container_focused := global_hot_container_id == id
+
+    // vertical scrollbar
+    if has_vertical_scrollbar {
+        sb_x := x + w - style_scrollbar.size
+        sb_y := y
+        sb_w := style_scrollbar.size
+        sb_h := h if !has_horizontal_scrollbar else h - style_scrollbar.size
+
+        ratio       := sb_h / content_h
+        thumb_size  := h*ratio
+        scroll_step := 1/ratio
+        if thumb_size < SCROLLBAR_MIN_THUMB_SIZE {
+            scroll_step = ((sb_h - thumb_size) / (sb_h - SCROLLBAR_MIN_THUMB_SIZE)) / ratio
+            thumb_size  = SCROLLBAR_MIN_THUMB_SIZE
+        }
+        thumb_pos   := sb_y - ratio*scroll_offset.y
+        thumb_color := style_scrollbar.thumb_idle_color
+
+        // scrollbar click
+        if is_region_hovered(sb_x, thumb_pos, style_scrollbar.size, thumb_size) {
+            // TODO: handle the click on the track (move thumb to mouse)
+            // TODO: when the thumb is clicked, we should allow the mouse
+            //       to go everywhere as long as the left button is
+            //       pressed
+            global_hot_id = id
+            if global_mouse_left_down {
+                global_active_id = id
+                thumb_color = style_scrollbar.thumb_clicked_color
+                scroll_offset.y -= scroll_step * global_mouse_motion.y
+            } else {
+                thumb_color = style_scrollbar.thumb_hovered_color
+            }
+        }
+
+        // mouse wheel action
+        if container_focused {
+            scroll_offset.y += 10 * rl.GetMouseWheelMoveV().y
+        }
+
+        // make sure the scroll offset is in bound
+        max_scroll_offset := content_h - h
+        scroll_offset.y = clamp(scroll_offset.y, -max_scroll_offset, 0)
+
+        // draw
+        draw_rect(sb_x, thumb_pos, style_scrollbar.size, thumb_size, thumb_color)
+        draw_rect(sb_x, sb_y, sb_w, sb_h, style_scrollbar.track_color)
+    }
+
+    // horizontal scrollbar
+    if has_horizontal_scrollbar {
+        // TODO
+    }
 }
