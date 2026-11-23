@@ -36,12 +36,42 @@ main :: proc() {
     iui.style_ui.font_size = FONT_SIZE
     defer rl.UnloadFont(iui.style_ui.font)
 
+    popup_opened := false
+    popup_position: [2]f32
+
     for !rl.WindowShouldClose() {
         rl.ClearBackground(rl.GetColor(0x222222ff))
         iui.init_frame(cast(f32)rl.GetScreenWidth(), cast(f32)rl.GetScreenHeight())
 
+        //
+        // we use a command stack so the first things to be drawn are drawn last
+        //
+
+        // this is not a real popup menu behavior
+        if rl.IsMouseButtonPressed(.RIGHT) {
+            popup_opened = !popup_opened
+            popup_position = rl.GetMousePosition()
+        }
+        if popup_opened {
+            iui.container_push_floating(234, popup_position.x, popup_position.y, 0, 0)
+            if iui.pane(bg_color = {0, 0, 0, 255}, padding = {10, 10, 10, 10}) {
+                iui.text("popup?")
+                if iui.row(item_spacing = 20, item_widths = {80, 80}) {
+                    if iui.button("OK") {
+                        fmt.println("OK")
+                        popup_opened = false
+                    }
+                    if iui.button("CANCEL") {
+                        fmt.println("CANCEL")
+                        popup_opened = false
+                    }
+                }
+            }
+            iui.container_pop_floating()
+        }
+
         iui.text("some text")
-        if iui.pane(bg_color = {0, 0, 255, 255}, padding = {10, 10, 10, 10}) {
+        if iui.pane(h = 100, bg_color = {0, 0, 255, 255}, padding = {10, 10, 10, 10}) {
             if iui.row(padding = {4, 4, 4, 4}, item_widths = {150, 0}, item_spacing = 10) {
 
                 @(static) buttons_header_status: bool
